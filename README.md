@@ -261,6 +261,7 @@ Other useful keybinds:
 ## Settings
 
 You can open the settings menu with F1 on keyboard, or `Plus`+`Minus` (`Start`+`Select`) on controller.
+Frame rate, FOV, draw distance, anti-aliasing, VSync, controls and volume apply as soon as you change them (Save keeps them; closing the menu without saving puts them back); the settings marked * at the next start.
 
 Every setting is also in `mhgurecomp.ini`, with a comment above each one that explains it. Details:
 [docs/SETTINGS_UI.md](docs/SETTINGS_UI.md).
