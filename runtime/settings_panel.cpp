@@ -59,6 +59,7 @@ struct Dropdown {
     int selected = 0;
     std::function<void(int)> set;
     ImRect anchor;  // that row on the screen, this frame (draw_rows)
+    bool preview = false;  // a setting's values: the highlighted one is live while the list is open (quick apply)
 };
 struct Keyboard {
     std::string title, original, buffer;
@@ -68,7 +69,7 @@ struct Keyboard {
     bool paste_only = false;  // (Add a cheat: Paste / Clear / Add / Cancel instead of the on-screen keys)
 };
 struct State {
-    Config draft = {}, saved = {};
+    Config draft = {}, saved = {}, previewed = {};  // previewed: what quick apply last made live
     bool editing = false, floating = false, advanced = false, focus_request = true, saved_notice = false;
     int page = 0;
     View view = View::Main;
@@ -523,11 +524,27 @@ bool accept_keyboard() {
     pop();
     return true;
 }
-// The row's choices in a dropdown under it; selected: the one it has now (-1: none of them)
-void choices(const Row &row, std::vector<std::string> names, int selected, std::function<void(int)> set) {
+// The row's choices in a dropdown under it; selected: the one it has now (-1: none of them); preview: they are a
+// setting's values (quick apply)
+void choices(const Row &row, std::vector<std::string> names, int selected, std::function<void(int)> set,
+             bool preview = false) {
     int first = std::clamp(selected, 0, (int)names.size() - 1);
-    s.dropdown = {true, false, false, row.id, std::move(names), selected, std::move(set), {}};
+    s.dropdown = {true, false, false, row.id, std::move(names), selected, std::move(set), {}, preview};
     focus("choice." + std::to_string(first));
+}
+// Quick apply: the draft with the highlighted value of an open dropdown of a setting's values in it (else the draft).
+Config live_draft() {
+    if (!s.dropdown.open || !s.dropdown.preview || s.focus.compare(0, 7, "choice.") ||
+        !isdigit((unsigned char)s.focus[7]))
+        return s.draft;
+    int i = atoi(s.focus.c_str() + 7);
+    if (i < 0 || i >= (int)s.dropdown.names.size())
+        return s.draft;
+    Config keep = s.draft;
+    s.dropdown.set(i);
+    Config live = s.draft;
+    s.draft = keep;
+    return live;
 }
 // What the settings table (config.c g_settings) says of a setting: does it need a restart, a number's range. ini():
 // the key a row is for (its restart mark and its help)
@@ -559,7 +576,7 @@ void add_choice(std::vector<Row> &rows, const char *id, const char *name, int se
     r.adjust = [selected, names, set](int d) { set((selected + d + (int)names.size()) % (int)names.size()); };
     Row copy = r;
     r.menu = true;
-    r.activate = [copy, names, selected, set]() { choices(copy, names, selected, set); };
+    r.activate = [copy, names, selected, set]() { choices(copy, names, selected, set, true); };
     rows.push_back(std::move(r));
 }
 void add_number(std::vector<Row> &rows, const std::string &id, const std::string &name,
@@ -1185,7 +1202,7 @@ std::vector<Row> main_rows() {
                     if (presets[i] <= s.draft.fps)
                         now = presets[i] == s.draft.fps ? i : -1 - i;  // (not one of them: start at the one below)
                 }
-                choices(copy, names, now, [](int v) { s.draft.fps = presets[v]; });
+                choices(copy, names, now, [](int v) { s.draft.fps = presets[v]; }, true);
                 if (now < -1)
                     focus("choice." + std::to_string(-1 - now));
             };
@@ -1810,6 +1827,10 @@ void draw_rows(std::vector<Row> &rows, bool list = false) {
         bool clicked = ImGui::Button("###row", ImVec2(rw, h));
         ImGui::EndDisabled();
         ImGui::PopStyleVar();
+        // In a dropdown the mouse highlights what it moves over, so quick apply shows it before a click
+        ImVec2 moved = ImGui::GetIO().MouseDelta;
+        if (list && r.enabled && !selected && (moved.x || moved.y) && ImGui::IsItemHovered())
+            focus(r.id);
         ImGui::PopStyleColor(4);
         if (!list && ImGui::IsItemHovered())
             s.hovered = r.id;
@@ -2055,7 +2076,7 @@ void settings_panel(bool *open) {
         return;
     }
     if (!s.editing) {
-        s.draft = s.saved = config_editable();
+        s.draft = s.saved = s.previewed = config_editable();
         s.editing = true;
         s.view = View::Main;
         s.origins.clear();
@@ -2338,10 +2359,11 @@ void settings_panel(bool *open) {
         if (cmd == Command::Save && save())
             focus("reset");
     }
-    if (!equal(before, s.draft)) {  // quick apply: the hot settings show at once; Save keeps them
-        config_preview(&s.draft);
-        if (dirty())
-            s.saved_notice = false;
+    // Quick apply: the hot settings show at once, in an open list of values the highlighted one; Save keeps them
+    Config live = live_draft();
+    if (!equal(live, s.previewed)) {
+        config_preview(&live);
+        s.previewed = live;
     }
     {  // (the folder Save folder's or Game files folder's picker chose: the picker ran on the window's thread)
         char folder[sizeof s.draft.save_dir];
@@ -2356,6 +2378,8 @@ void settings_panel(bool *open) {
             s.draft = temp;
 #endif
     }
+    if (!equal(before, s.draft) && dirty())
+        s.saved_notice = false;
     if (ui_action_failed())
         s.error = tr("Restart failed. The game is still running.");
     if (!s.error.empty()) {

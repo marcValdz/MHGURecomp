@@ -69,7 +69,9 @@ draft and requires a subsequent Save. A write failure preserves draft and file.
 Volume, FPS, FOV, draw distance, FXAA, MSAA, VSync, mouse sensitivity, face
 mapping, background input, combo window and confirmation policy apply as soon as
 they change in the draft (quick apply: `config_preview`), without Save or a
-restart; Save keeps them, and closing or discarding without saving puts back what
+restart; in an open list of a setting's values the highlighted one (d-pad, keys,
+or the mouse moving over it) is live before it is chosen, and Cancel puts the
+draft's back. Save keeps them, and closing or discarding without saving puts back what
 was live before (an unchanged environment override included).
 Save applies Monster HP's factors and quest overrides and the Village Quests settings without restarting (the next large monster's HP, part HP at its next refill, the
 counter's rank or star menu).
