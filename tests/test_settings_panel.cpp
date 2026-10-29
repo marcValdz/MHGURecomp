@@ -390,6 +390,19 @@ int main() {
     tab();
     selected("display.mode");
     tab();
+    down(6);  // (mutebg, show.fps, fps, vsync, prewarm, msaa)
+    selected("msaa");
+    // Quick apply in a dropdown of values: the highlighted one is live before it is chosen; Back puts it back
+    int msaa_before = config_live_msaa();
+    confirm();
+    selected("choice.0");
+    down();
+    selected("choice.1");
+    assert(config_live_msaa() == 2 && !settings_panel_dirty());
+    back();
+    selected("msaa");
+    assert(config_live_msaa() == msaa_before && !settings_panel_dirty());
+    press(ImGuiKey_Home);
     selected("volume");
     confirm();
     selected("volume");
