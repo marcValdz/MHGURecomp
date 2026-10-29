@@ -2030,6 +2030,8 @@ void settings_panel_before_frame(bool open) {
 }
 void settings_panel(bool *open) {
     if (!*open) {
+        if (s.editing)
+            config_preview_end();
         s.editing = false;
         is_dirty = false;
         is_confirming = false;
@@ -2321,8 +2323,11 @@ void settings_panel(bool *open) {
         if (cmd == Command::Save && save())
             focus("reset");
     }
-    if (!equal(before, s.draft) && dirty())
-        s.saved_notice = false;
+    if (!equal(before, s.draft)) {  // quick apply: the hot settings show at once; Save keeps them
+        config_preview(&s.draft);
+        if (dirty())
+            s.saved_notice = false;
+    }
     {  // (the folder Save folder's or Game files folder's picker chose: the picker ran on the window's thread)
         char folder[sizeof s.draft.save_dir];
         int which = ui_take_picked_folder(folder, sizeof folder);
@@ -2394,6 +2399,8 @@ void settings_panel(bool *open) {
     capture_mouse = is_capturing && s.capture_bind >= 0;
     capture_pointing = s.pointing;
     capture_wheel = is_capturing && s.capture_bind >= 0;  // (the capture view doesn't scroll)
-    if (!*open)
+    if (!*open) {
+        config_preview_end();
         s.editing = false;
+    }
 }

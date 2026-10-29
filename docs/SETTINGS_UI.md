@@ -66,9 +66,12 @@ there are no pending changes. Restart saves settings after explicit confirmation
 No settings operation saves game progress. Reset this section changes only the
 draft and requires a subsequent Save. A write failure preserves draft and file.
 
-Save applies volume, FPS, FOV, FXAA, MSAA, VSync, mouse sensitivity, face mapping,
-background input and confirmation policy without restarting.
-So do Monster HP's factors and quest overrides and the Village Quests settings (the next large monster's HP, part HP at its next refill, the
+Volume, FPS, FOV, draw distance, FXAA, MSAA, VSync, mouse sensitivity, face
+mapping, background input, combo window and confirmation policy apply as soon as
+they change in the draft (quick apply: `config_preview`), without Save or a
+restart; Save keeps them, and closing or discarding without saving puts back what
+was live before (an unchanged environment override included).
+Save applies Monster HP's factors and quest overrides and the Village Quests settings without restarting (the next large monster's HP, part HP at its next refill, the
 counter's rank or star menu).
 Multiplayer's Port and Join (from the next hub hosted or searched for) and SyncSmallMonsters apply at Save too.
 BonusContent counts from the next time the game opens the save, and the cheats folder is read again each time the
