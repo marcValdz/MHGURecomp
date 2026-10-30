@@ -60,7 +60,7 @@ static inline const char *settings_text(int language, const char *english) {
         {"Reading mods", "Leyendo mods"},
         {"Applying mods", "Aplicando mods"},
         {"files", "archivos"},
-        {"FXAA mode", "Modo de FXAA"},
+        {"Game", "Juego"},
         {"Anti-aliasing", "Suavizado de bordes"},
         {"Application audio", "Audio de la aplicación"},
         {"Master volume", "Volumen general"},

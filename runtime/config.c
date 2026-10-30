@@ -3,6 +3,8 @@
 // deleting it resets everything; keys that are missing or not understood keep their defaults (the log says which).
 //   MHGU_CONFIG=<path>   another settings file
 //   MHGU_WINDOW=WxH      windowed at that size, MHGU_RENDER=WxH  3D resolution, MHGU_MSAA=1|2|4|8, MHGU_FXAA=0|1,
+//                        MHGU_AA=FXAA|CMAA2|SMAA|SMAAS2x|SMAAT2x|SMAA4x (AntiAliasing) or Off|Game|FXAA311 (FXAA
+//                        and FXAAMode),
 //                        MHGU_RT16=0|1 (SmoothGradients), MHGU_FIX_KERNING=0|1, MHGU_BOLD_TEXT=0|1, MHGU_HDR=0|1,
 //                        MHGU_PAD_POSITIONAL=0|1 (test runs; override the file)
 #include <ctype.h>
@@ -867,6 +869,17 @@ const ConfigSetting *config_setting(const char *key) {
     return NULL;
 }
 
+int config_aa_choice(const Config *c) {
+    if (c->aa != AA_FXAA) return AA_CHOICE_CMAA2 + c->aa - AA_CMAA2;
+    return !c->fxaa ? AA_CHOICE_OFF : c->fxaa_mode == FXAA_311 ? AA_CHOICE_FXAA : AA_CHOICE_GAME;
+}
+void config_set_aa_choice(Config *c, int choice) {
+    if (choice < 0 || choice >= AA_CHOICES) return;
+    if (choice >= AA_CHOICE_CMAA2) { c->aa = AA_CMAA2 + choice - AA_CHOICE_CMAA2; return; }  // (FXAA as it was)
+    c->aa = AA_FXAA, c->fxaa = choice != AA_CHOICE_OFF;
+    if (c->fxaa) c->fxaa_mode = choice == AA_CHOICE_FXAA ? FXAA_311 : FXAA_ORIGINAL;
+}
+
 // The first spelling of a choice (as the file writes it)
 static void choice_name(const char *list, int index, char *buf, size_t size) {
     const char *p = list;
@@ -1226,6 +1239,12 @@ void config_load(void) {
     if ((e = getenv("MHGU_FIX_KERNING"))) g_config.fix_kerning = atoi(e) != 0;
     if ((e = getenv("MHGU_BOLD_TEXT"))) g_config.bold_text = atoi(e) != 0;
     if ((e = getenv("MHGU_HDR"))) g_config.hdr = atoi(e) != 0;
+    if ((e = getenv("MHGU_AA"))) {  // (also the settings menu's Off, Game and FXAA 3.11)
+        if (!strcasecmp(e, "off")) config_set_aa_choice(&g_config, AA_CHOICE_OFF);
+        else if (!strcasecmp(e, "game")) config_set_aa_choice(&g_config, AA_CHOICE_GAME);
+        else if (!strcasecmp(e, "fxaa311") || !strcasecmp(e, "3_11")) config_set_aa_choice(&g_config, AA_CHOICE_FXAA);
+        else config_parse(config_setting("AntiAliasing"), e, &g_config);
+    }
     if ((e = getenv("MHGU_BACKGROUND_INPUT"))) g_config.background_input = atoi(e) != 0;
     if ((e = getenv("MHGU_PAD_POSITIONAL"))) g_config.face_buttons = atoi(e) ? FACE_POSITION : FACE_LABEL;
     if ((e = getenv("MHGU_LDN_PORT")) && atoi(e) > 0) g_config.ldn_port = atoi(e);

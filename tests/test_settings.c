@@ -191,6 +191,16 @@ int main(int argc, char **argv) {
     assert(config_defaults().combo_window==COMBO_LENIENT);
     assert(config_defaults().fxaa_mode==FXAA_ORIGINAL);
     assert(config_defaults().aa==AA_FXAA);
+    {   // the settings menu's one Anti-aliasing row over FXAA, FXAAMode and AntiAliasing
+        Config x=config_defaults();
+        assert(config_aa_choice(&x)==AA_CHOICE_GAME);
+        config_set_aa_choice(&x,AA_CHOICE_FXAA);assert(x.fxaa && x.fxaa_mode==FXAA_311 && x.aa==AA_FXAA);
+        config_set_aa_choice(&x,AA_CHOICE_OFF);assert(!x.fxaa && x.aa==AA_FXAA && config_aa_choice(&x)==AA_CHOICE_OFF);
+        config_set_aa_choice(&x,AA_CHOICES-1);assert(x.aa==AA_SMAA_4X && config_aa_choice(&x)==AA_CHOICES-1);
+        config_set_aa_choice(&x,AA_CHOICE_CMAA2);assert(x.aa==AA_CMAA2 && config_aa_choice(&x)==AA_CHOICE_CMAA2);
+        config_set_aa_choice(&x,AA_CHOICES);assert(x.aa==AA_CMAA2);  // (out of range)
+        config_set_aa_choice(&x,AA_CHOICE_GAME);assert(x.fxaa && x.fxaa_mode==FXAA_ORIGINAL && x.aa==AA_FXAA);
+    }
     fsr_config.fsr=1;fsr_config.fsr_quality=FSR_BALANCED;
     fsr_config.fsr_sharpness=.65f;fsr_config.fsr_objmotion=0;fsr_config.fsr_reactive=.35f;fsr_config.fsr_animsurf=0;
     fsr_config.msaa=8;fsr_config.fxaa=1;

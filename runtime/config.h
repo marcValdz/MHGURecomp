@@ -16,6 +16,9 @@ enum { FXAA_ORIGINAL, FXAA_311 };  // [Anti-aliasing] FXAAMode (runtime/nvn/vulk
 // [Anti-aliasing] AntiAliasing (nvn/vulkan/cmaa2.c, smaa.c, fsr.c)
 enum { AA_FXAA, AA_CMAA2, AA_SMAA, AA_SMAA_S2X, AA_SMAA_T2X, AA_SMAA_4X };
 #define AA_USES_S2X(aa) ((aa) == AA_SMAA_S2X || (aa) == AA_SMAA_4X)  // (they render the scene with MSAA 2x)
+// The settings menu's one Anti-aliasing row over FXAA, FXAAMode and AntiAliasing: Off, Game (the game's own FXAA),
+// FXAA (3.11), then AntiAliasing's CMAA2 .. SMAA 4x in their order (config_aa_choice)
+enum { AA_CHOICE_OFF, AA_CHOICE_GAME, AA_CHOICE_FXAA, AA_CHOICE_CMAA2, AA_CHOICES = AA_CHOICE_CMAA2 + AA_SMAA_4X };
 
 // [Keybinds]: the keyboard and mouse controls (runtime/host_input.c), in the file's order. Each takes up to two keys
 // or mouse buttons: an SDL scancode, KEY_MOUSE + SDL_BUTTON_*, or the wheel's KEY_WHEEL_UP / KEY_WHEEL_DOWN (0: none).
@@ -213,6 +216,8 @@ float config_live_fov(void);
 float config_live_mouse_sensitivity(void);
 float config_live_draw_distance(void);
 int config_live_fxaa(void);
+int config_aa_choice(const Config *c);              // AA_CHOICE_*: what FXAA, FXAAMode and AntiAliasing pick together
+void config_set_aa_choice(Config *c, int choice);  // (out of range: nothing changes)
 int config_live_msaa(void);
 int config_live_vsync(void);
 int config_live_face_buttons(void);

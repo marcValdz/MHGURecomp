@@ -158,7 +158,7 @@ static void publish_live(const Config *c, bool all) {
 // config_preview_end puts those back. A save keeps the previewed values: they are the file's from then on.
 static SDL_AtomicInt *const hot[] = {&live_fps, &live_fov, &live_mouse, &live_draw, &live_fxaa, &live_msaa, &live_vsync,
                                      &live_face, &live_menu_confirm, &live_background, &live_combo, &volume,
-                                     &mute_in_background, &live_fxaa_mode, &live_smooth};
+                                     &mute_in_background, &live_fxaa_mode, &live_smooth, &live_aa};
 #define NHOT (sizeof hot / sizeof hot[0])
 static int hot_before[NHOT];
 static bool previewing;
@@ -167,7 +167,7 @@ static void hot_values(const Config *c, int v[NHOT]) {
     const int all[NHOT] = {float_bits((float)c->fps), float_bits(c->fov), float_bits(c->mouse_sensitivity),
                            float_bits(c->draw_distance), c->fxaa, c->msaa, c->vsync, c->face_buttons, c->menu_confirm,
                            c->background_input, c->combo_window, c->volume, c->mute_in_background, c->fxaa_mode,
-                           c->smooth_gradients};
+                           c->smooth_gradients, c->aa};
     memcpy(v, all, sizeof all);
 }
 void config_preview(const Config *draft) {
