@@ -129,6 +129,8 @@ Fixed on the way (2026-10-20):
   in the town, at a 1280x720 render size and in quest 101. The same test for 3_11 (town, both GPUs): also all zero. The
   game's fma()s and the order of its sums had to stay: without them 0.15% of pixels differed, as exact ties go by rounding.
   Not looking again at a search side that hasn't moved gives the same picture, but took 1.75 ms instead of 1.54 on the iGPU.
+  AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c: third_party/smaa's SMAA.hlsl through its GLSL
+  path with shaderc, Ultra preset: luma edges, blending weights, then the blend into the game's target).
 - Frame rate: the settings' FPS or MHGU_FRAMERATE (default 60, 30..240) writes the engine's target fps (float at +0x3c of the object in
   global 0x2326764, the field theboy181's 60fps patch sets) each frame. Above the monitor's refresh rate it needs
   VSync = Off: see "Frame rates above 60". MHGU_VSYNC=0/1 overrides the setting: no vsync / classic vsync.

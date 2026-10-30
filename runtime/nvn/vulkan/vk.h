@@ -196,5 +196,11 @@ VkShaderModule vk_compile_glsl(const char *src, int stage, const char *name);  /
 VkShaderModule vk_builtin_shader(const char *name);  // internal shaders (clear, present)
 const char *vk_builtin_source(const char *name);     // (the GLSL of one)
 
+// ---- anti-aliasing in place of the game's FXAA pass (exec.c fxaa_skipped): the input that pass samples and the
+// colour target it draws into (format, size w x h), both in GENERAL layout; recorded outside a render pass
+// (src_image, level: the input's image and the level of the target dst views, for copies)
+typedef struct { VkImageView src, dst; VkImage dst_image, src_image; VkFormat format; uint32_t w, h, level; } VkPostAa;
+bool vk_smaa(const VkPostAa *t);  // SMAA 1x (smaa.c); false: not drawn
+
 // ---- device / window (device.c)
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);

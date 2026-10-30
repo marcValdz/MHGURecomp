@@ -13,6 +13,7 @@ enum { FACE_POSITION, FACE_LABEL };
 enum { COMBO_LENIENT, COMBO_STRICT };  // [Controls] ComboInputWindow (runtime/hle/combowin.c)
 enum { MENU_CONFIRM_ORIGINAL, MENU_CONFIRM_SOUTH, MENU_CONFIRM_EAST };
 enum { FXAA_ORIGINAL, FXAA_311 };  // [Anti-aliasing] FXAAMode (runtime/nvn/vulkan/exec.c)
+enum { AA_FXAA, AA_SMAA };        // [Anti-aliasing] AntiAliasing (runtime/nvn/vulkan/smaa.c)
 
 // [Keybinds]: the keyboard and mouse controls (runtime/host_input.c), in the file's order. Each takes up to two keys
 // or mouse buttons: an SDL scancode, KEY_MOUSE + SDL_BUTTON_*, or the wheel's KEY_WHEEL_UP / KEY_WHEEL_DOWN (0: none).
@@ -130,6 +131,7 @@ typedef struct {
     int ldn_ryu_serve_port;   // [Multiplayer] RyuServePort: its port; 0 = 30456, the LdnServer default
     int ldn_room_serve;       // [Multiplayer] RoomServe: this game runs a suyu-style room itself (runtime/net/roomsrv.c): the pseudo room for suyu-family players
     int ldn_room_serve_port;  // [Multiplayer] RoomServePort: its port; 0 = 24872, the rooms' default
+    int aa;                   // [Anti-aliasing] AntiAliasing: AA_*, what draws in the game's FXAA pass
 } Config;
 // The hub server used when ini Server is empty (runtime/net/ldn.c, server/): the project's public one (an Oracle
 // Cloud VM; a DuckDNS name, so it can move without a release). "" = no default.
@@ -257,6 +259,7 @@ int config_live_bonus_content(void);    // [Bonus Content] BonusContent: each ti
 int config_live_discord(void);         // [Discord] RichPresence
 int config_live_discord_hunter(void);  // [Discord] ShowHunter
 int config_live_share_urgent(void);    // [Multiplayer] ShareUrgentCredit
+int config_live_aa(void);
 void config_live_ldn(char *server, size_t server_size, char *key, size_t key_size);  // [Multiplayer] Server, Key
 bool config_restart_required(const Config *draft); // Raw cold fields vs this process's startup INI values.
 float config_audio_gain(void);  // atomic, safe on audio threads; 0 while muted in the background

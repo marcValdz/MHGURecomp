@@ -25,6 +25,7 @@ static SDL_AtomicInt live_fov;
 static SDL_AtomicInt live_msaa = {1};
 static SDL_AtomicInt live_fxaa = {1};
 static SDL_AtomicInt live_fxaa_mode;
+static SDL_AtomicInt live_aa;
 // [Upscaler]
 static SDL_AtomicInt live_fsr_sharpness;
 static SDL_AtomicInt live_fsr_reactive;
@@ -138,6 +139,7 @@ static void publish_live(const Config *c, bool all) {
     for (int i = 0; i < BINDS; i++)
         for (int k = 0; k < BIND_KEYS; k++)
             if (all || c->binds[i][k] != saved.binds[i][k]) SDL_SetAtomicInt(&live_binds[i][k], c->binds[i][k]);
+    if (all || c->aa != saved.aa) SDL_SetAtomicInt(&live_aa, c->aa);
     if (all || strcmp(c->ldn_server, saved.ldn_server) || strcmp(c->ldn_key, saved.ldn_key) || strcmp(c->ldn_join, saved.ldn_join)) {
         SDL_LockSpinlock(&live_ldn_lock);
         if (all || strcmp(c->ldn_server, saved.ldn_server)) memcpy(live_ldn_server, c->ldn_server, sizeof live_ldn_server);
@@ -247,6 +249,7 @@ int config_live_bind(int bind, int slot) {
 }
 bool config_mod_bound(int bind) { return SDL_GetAtomicInt(&mod_bind_set[bind]) != 0; }
 int config_player_bind(int bind, int slot) { return SDL_GetAtomicInt(&live_binds[bind][slot]); }
+int config_live_aa(void) { return runtime_fsr ? AA_FXAA : SDL_GetAtomicInt(&live_aa); }
 void config_live_ldn(char *server, size_t server_size, char *key, size_t key_size) {
     SDL_LockSpinlock(&live_ldn_lock);
     if (server) SDL_strlcpy(server, live_ldn_server, server_size);

@@ -3834,20 +3834,56 @@ static bool fxaa_311(NvnTexture *src) {
     return true;
 }
 
+// The game's FXAA pass about to be replaced: the pass ended, src and the colour target resolved, their views and the
+// target's size (false: not possible, the game's own pass draws instead). post_aa_drawn after a replacement drew.
+static bool post_aa_target(NvnTexture *src, VkPostAa *t) {
+    NvnTexture *dt = st.rt.color[0];
+    TexBackend *s = vk_tex(src, false), *d = vk_tex(dt, true);
+    if (s->samples != 1 || d->samples != 1) return false;
+    vk_end_pass();
+    st.rt_dirty = true;
+    vk_ms_resolve(s);
+    vk_ms_resolve(d);
+    bool has = st.rt.has_cview[0];
+    t->src = vk_view(src, NULL, false, false, TEXTYPE_2D);
+    t->dst = vk_view(dt, &st.rt.cview[0], has, true, TEXTYPE_2D);
+    t->dst_image = d->image, t->src_image = s->image;
+    t->format = has && (st.rt.cview[0].setmask & 4) && vk_format(dt->format) == d->format ? vk_format(st.rt.cview[0].format)
+                                                                                         : d->format;
+    uint32_t lv = has && (st.rt.cview[0].setmask & 1) ? st.rt.cview[0].base_level : 0;
+    t->w = level_extent(d->width, lv), t->h = level_extent(d->height, lv), t->level = lv;
+    if (s->width < t->w || s->height < t->h || s->format != t->format) t->src_image = VK_NULL_HANDLE;  // (not for copies)
+    return t->src && t->dst;
+}
+static void post_aa_drawn(void) {
+    vk_tex(st.rt.color[0], true)->ms_valid = false;
+    renderer_mark_gpu_owned(st.rt.color[0]);
+    ss_forget();
+    stat_draws++;
+}
+
 // FXAA off (settings): the game's FXAA pass (recognised by its shader) copies its input instead; FXAAMode = 3_11 draws
-// FXAA 3.11 there (fxaa_311).
+// FXAA 3.11 there (fxaa_311); AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c).
 static void copy_texture(const TexRef *src, const TexRef *dst, uint64_t flags);
 static bool fxaa_skipped(Prog *pr) {
     if (prog_fs_hash(pr) == FXAA_FS_HASH) {
         aa_pass_frame = g_present_count;  // (menus: full_picture)
         gp_next_note = " (FXAA)";
     }
+    int aa = config_live_aa();
     bool fxaa_311_on = config_live_fxaa() && config_live_fxaa_mode() == FXAA_311;
-    if ((config_live_fxaa() && !fxaa_311_on) || prog_fs_hash(pr) != FXAA_FS_HASH || pr->fi->ntex != 1 || !st.rt.ncolor ||
-        !st.rt.color[0])
+    if ((aa == AA_FXAA && config_live_fxaa() && !fxaa_311_on) || prog_fs_hash(pr) != FXAA_FS_HASH || pr->fi->ntex != 1 ||
+        !st.rt.ncolor || !st.rt.color[0])
         return false;
     NvnTexture *src = shader_texture_object(1, &pr->fi->tex[0]);
     if (!src || src == st.rt.color[0]) return false;
+    if (aa == AA_SMAA) {  // (not possible: the game's own pass draws)
+        VkPostAa t;
+        if (!post_aa_target(src, &t) || !vk_smaa(&t)) return false;
+        post_aa_drawn();
+        gp_next_note = "";
+        return true;
+    }
     if (fxaa_311_on) {
         if (!fxaa_311(src)) return false;
         gp_next_note = "";

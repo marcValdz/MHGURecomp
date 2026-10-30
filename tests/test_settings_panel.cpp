@@ -619,7 +619,7 @@ int main() {
     press(ImGuiKey_GamepadL1);
     press(ImGuiKey_GamepadL1);
     selected("volume");
-    down(13);  // (mutebg, show.fps, fps, vsync, prewarm, msaa, fxaa, fxaamode, drawdist, smooth, kerning, boldtext, fsr)
+    down(14);  // (mutebg, show.fps, fps, vsync, prewarm, msaa, fxaa, fxaamode, aa, drawdist, smooth, kerning, boldtext, fsr)
     selected("fsr");
     confirm();
     assert(settings_panel_dirty());

@@ -48,6 +48,7 @@
     .msaa = 1,                                                                                      \
     .fxaa = 1,                                                                                      \
     .fxaa_mode = FXAA_ORIGINAL,                                                                     \
+    .aa = AA_FXAA,                                                                                  \
     /* [Upscaler] */                                                                                \
     .fsr = 0,                                                                                       \
     .fsr_quality = FSR_NATIVE,                                                                      \
@@ -178,6 +179,11 @@ static const char DEFAULT_INI[] =
     "; Original, 3_11\n"
     "; Default: Original\n"
     "FXAAMode = Original\n"
+    "\n"
+    "; What draws in place of GU's FXAA: FXAA follows the settings above, SMAA is SMAA 1x\n"
+    "; FXAA, SMAA\n"
+    "; Default: FXAA\n"
+    "AntiAliasing = FXAA\n"
     "\n"
     "[Upscaler]\n"
     "; FSR temporal upscaling\n"
@@ -703,6 +709,7 @@ const ConfigSetting g_settings[] = {
     {"Anti-aliasing", "MSAA", SET_CHOICE, F(msaa), 0, 0, 0, "Off|none|0|1|1x,2x|2,4x|4,8x|8", msaa_values, false, ERR_MISC},
     ON_OFF("Anti-aliasing", "FXAA", fxaa, false),
     {"Anti-aliasing", "FXAAMode", SET_CHOICE, F(fxaa_mode), 0, 0, 0, "Original,3_11", NULL, false, ERR_MISC},
+    {"Anti-aliasing", "AntiAliasing", SET_CHOICE, F(aa), 0, 0, 0, "FXAA,SMAA", NULL, false, ERR_MISC},
     ON_OFF("Upscaler", "FSR", fsr, true),
     {"Upscaler", "FSRQuality", SET_CHOICE, F(fsr_quality), 0, 0, 0,
      "NativeAA|native|aa,Quality,Balanced,Performance,UltraPerformance|ultraperf", NULL, true, ERR_FSR},
