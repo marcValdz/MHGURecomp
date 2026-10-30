@@ -36,7 +36,7 @@ Status: fully playable, but there may be some bugs. I've played a dozen hunts wi
     - SteamOS 3.7
     - Arch
     - Fedora 40
-- CPU: Any CPU from 2014 or newer (needs AVX2 support)
+- CPU: Any 64-bit CPU with SSE4.2 (Intel from 2008, AMD from 2011). CPUs with AVX2 get the game code built for them.
 - GPU: Any GPU from 2016 or newer (needs Vulkan 1.2 support), and at least 1GB of VRAM
 - RAM: 4GB
 - Android (experimental, see [Android](#android)): a 64-bit ARM phone or tablet with Android 10 or newer, a GPU
@@ -393,7 +393,9 @@ Useful targets and options:
 
 - `make test-lift`: checks the recompiler against the Unicorn CPU emulator on thousands of the game's instructions.
 - `make clean`: removes the compiled files (`obj\` and the program files in `build\`). It keeps `build\data`.
-- `GENARCH=-march=x86-64-v2`: compiles the game code without AVX2, for older CPUs. Untested.
+- The game code is built twice: `mhgugame` for CPUs with AVX2 / FMA / BMI2 (`GENARCH=-march=x86-64-v3`) and
+  `mhgugame-noavx2` for older ones (`GENARCH_NOAVX2=-march=x86-64-v2`); the game loads the one its CPU runs. `GENARCH_NOAVX2=`
+  (empty) builds only the first.
 - `FFMPEG=system`: links the system's FFmpeg libraries instead of building them (see below).
 - Linux: `SDL3=system`, `SHADERC=system`: link the system's SDL3 / shaderc instead of building them (see Linux).
 
