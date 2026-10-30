@@ -131,6 +131,12 @@ Fixed on the way (2026-10-20):
   Not looking again at a search side that hasn't moved gives the same picture, but took 1.75 ms instead of 1.54 on the iGPU.
   AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c: third_party/smaa's SMAA.hlsl through its GLSL
   path with shaderc, Ultra preset: luma edges, blending weights, then the blend into the game's target).
+  AntiAliasing = SMAAT2x is SMAA T2x: fsr.c runs FSR's frame structure, camera jitter and motion vectors at the render
+  size (g_temporal_on), the camera jitters by a quarter pixel on alternate frames (camjit_t2x), and at the start of the
+  HUD smaa.c's vk_smaa_t2x runs SMAA with that frame's subsample indices and resolves it with the previous frame,
+  reprojected along the motion vectors; the previous colour is clamped to the current 3x3 neighbourhood and dropped
+  where fsr.c's reactive mask is set, so moving characters don't ghost. Programs built before it was picked get their
+  motion capture variant the first time they draw with it on (exec.c capprog_later).
 - Frame rate: the settings' FPS or MHGU_FRAMERATE (default 60, 30..240) writes the engine's target fps (float at +0x3c of the object in
   global 0x2326764, the field theboy181's 60fps patch sets) each frame. Above the monitor's refresh rate it needs
   VSync = Off: see "Frame rates above 60". MHGU_VSYNC=0/1 overrides the setting: no vsync / classic vsync.

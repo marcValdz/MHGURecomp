@@ -1,8 +1,13 @@
-// SMAA 1x in place of the game's FXAA pass ([Anti-aliasing] AntiAliasing = SMAA; exec.c fxaa_skipped). Jorge
-// Jimenez et al.'s SMAA (third_party/smaa, MIT): SMAA.hlsl's GLSL path, compiled with shaderc, and its precomputed
-// area and search textures. Three passes at the target's size: luma edge detection of the game's FXAA input (gamma
-// space, as SMAA wants it) into an RG8 image, the blending weights into an RGBA8 one, then the neighbourhood blending
-// into the game's target. The edges are cleared first: the edge pass discards where there is none.
+// SMAA 1x and T2x ([Anti-aliasing] AntiAliasing = SMAA / SMAAT2x). Jorge Jimenez et al.'s SMAA (third_party/smaa,
+// MIT): SMAA.hlsl's GLSL path, compiled with shaderc, and its precomputed area and search textures.
+//  - 1x, in place of the game's FXAA pass (exec.c fxaa_skipped): three passes at the target's size: luma edge
+//    detection of the game's FXAA input (gamma space, as SMAA wants it) into an RG8 image, the blending weights into an
+//    RGBA8 one, then the neighbourhood blending into the game's target. The edges are cleared first: the edge pass
+//    discards where there is none.
+//  - T2x, on the full-screen image at the start of the HUD (fsr.c: the camera jittered by a quarter pixel one way, then
+//    the other, and its motion vectors): the same passes with that frame's subsample indices into one of two history
+//    images, the velocity's length packed in alpha (SMAA_REPROJECTION), then SMAA's resolve of it and the previous
+//    frame's, reprojected along the motion vectors, back into the image.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,37 +23,32 @@ __asm__(".pushsection .rodata\n.globl smaa_hlsl\nsmaa_hlsl:\n.incbin \"third_par
         ".globl smaa_hlsl_end\nsmaa_hlsl_end:\n.byte 0\n.popsection");
 extern const char smaa_hlsl[], smaa_hlsl_end[];
 
-enum { EDGES, WEIGHTS, BLEND, NPASS };
+enum { EDGES, WEIGHTS, BLEND, BLEND_T2X, RESOLVE, NPASS };
 typedef struct { VkImage image; VmaAllocation mem; VkImageView view; uint32_t w, h; } Img;
 
-// The passes' GLSL: SMAA.hlsl's vertex or pixel half (the Ultra preset, and the target's size from the push constants)
-// around a main that feeds it SMAA's texture coordinates of a full-screen triangle.
+// The passes' GLSL: SMAA.hlsl's vertex or pixel half (the Ultra preset, the target's size and the subsample indices from
+// the push constants) around a main that feeds it SMAA's texture coordinates of a full-screen triangle. The motion
+// vectors (fsr.c) are where a texel was in the previous frame minus where it is, in pixels; SMAA's velocity is the
+// other way round, in texture coordinates.
+#define VS_HEAD "  vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n" \
+                "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n" \
+                "  texcoord = p;\n"
 static const char *const vs_main[NPASS] = {
     "layout(location = 0) out vec2 texcoord;\n"
     "layout(location = 1) out vec4 offset[3];\n"
-    "void main() {\n"
-    "  vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n"
-    "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
-    "  texcoord = p;\n"
-    "  SMAAEdgeDetectionVS(texcoord, offset);\n"
-    "}\n",
+    "void main() {\n" VS_HEAD "  SMAAEdgeDetectionVS(texcoord, offset);\n}\n",
     "layout(location = 0) out vec2 texcoord;\n"
     "layout(location = 1) out vec4 offset[3];\n"
     "layout(location = 4) out vec2 pixcoord;\n"
-    "void main() {\n"
-    "  vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n"
-    "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
-    "  texcoord = p;\n"
-    "  SMAABlendingWeightCalculationVS(texcoord, pixcoord, offset);\n"
-    "}\n",
+    "void main() {\n" VS_HEAD "  SMAABlendingWeightCalculationVS(texcoord, pixcoord, offset);\n}\n",
     "layout(location = 0) out vec2 texcoord;\n"
     "layout(location = 1) out vec4 offset;\n"
-    "void main() {\n"
-    "  vec2 p = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);\n"
-    "  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);\n"
-    "  texcoord = p;\n"
-    "  SMAANeighborhoodBlendingVS(texcoord, offset);\n"
-    "}\n"};
+    "void main() {\n" VS_HEAD "  SMAANeighborhoodBlendingVS(texcoord, offset);\n}\n",
+    "layout(location = 0) out vec2 texcoord;\n"
+    "layout(location = 1) out vec4 offset;\n"
+    "void main() {\n" VS_HEAD "  SMAANeighborhoodBlendingVS(texcoord, offset);\n}\n",
+    "layout(location = 0) out vec2 texcoord;\n"
+    "void main() {\n" VS_HEAD "}\n"};
 static const char *const fs_main[NPASS] = {
     "layout(set = 0, binding = 0) uniform sampler2D colorTex;\n"
     "layout(location = 0) in vec2 texcoord;\n"
@@ -62,23 +62,55 @@ static const char *const fs_main[NPASS] = {
     "layout(location = 1) in vec4 offset[3];\n"
     "layout(location = 4) in vec2 pixcoord;\n"
     "layout(location = 0) out vec4 o;\n"
-    "void main() { o = SMAABlendingWeightCalculationPS(texcoord, pixcoord, offset, edgesTex, areaTex, searchTex, vec4(0.0)); }\n",
+    "void main() { o = SMAABlendingWeightCalculationPS(texcoord, pixcoord, offset, edgesTex, areaTex, searchTex, pc.sub); }\n",
     "layout(set = 0, binding = 0) uniform sampler2D colorTex;\n"
     "layout(set = 0, binding = 1) uniform sampler2D blendTex;\n"
     "layout(location = 0) in vec2 texcoord;\n"
     "layout(location = 1) in vec4 offset;\n"
     "layout(location = 0) out vec4 o;\n"
-    "void main() { o = SMAANeighborhoodBlendingPS(texcoord, offset, colorTex, blendTex); }\n"};
+    "void main() { o = SMAANeighborhoodBlendingPS(texcoord, offset, colorTex, blendTex); }\n",
+    "layout(set = 0, binding = 0) uniform sampler2D colorTex;\n"
+    "layout(set = 0, binding = 1) uniform sampler2D blendTex;\n"
+    "layout(set = 0, binding = 2) uniform sampler2D velocityTex;\n"
+    "layout(location = 0) in vec2 texcoord;\n"
+    "layout(location = 1) in vec4 offset;\n"
+    "layout(location = 0) out vec4 o;\n"
+    "void main() { o = SMAANeighborhoodBlendingPS(texcoord, offset, colorTex, blendTex, velocityTex); }\n",
+    // SMAAResolvePS (SMAA_REPROJECTION), with the previous frame's colour clamped to the range of the current frame's
+    // 3x3 neighbourhood: where the motion vectors are wrong (a limb the object vectors miss, the background a moving
+    // character uncovers) the old picture is not blended in as a ghost. No history from outside the picture, nor where
+    // the reactive mask (fsr.c: where the game's moving-object mask changed since the last frame) says a character moved.
+    "layout(set = 0, binding = 0) uniform sampler2D currentColorTex;\n"
+    "layout(set = 0, binding = 1) uniform sampler2D previousColorTex;\n"
+    "layout(set = 0, binding = 2) uniform sampler2D velocityTex;\n"
+    "layout(set = 0, binding = 3) uniform sampler2D reactiveTex;\n"
+    "layout(location = 0) in vec2 texcoord;\n"
+    "layout(location = 0) out vec4 o;\n"
+    "#define NB(x, y) c = textureLodOffset(currentColorTex, texcoord, 0.0, ivec2(x, y)).rgb; lo = min(lo, c); hi = max(hi, c);\n"
+    "void main() {\n"
+    "  vec2 velocity = -SMAA_DECODE_VELOCITY(textureLod(velocityTex, texcoord, 0.0));\n"
+    "  vec2 at = texcoord + velocity;\n"
+    "  vec4 current = textureLod(currentColorTex, texcoord, 0.0), previous = textureLod(previousColorTex, at, 0.0);\n"
+    "  vec3 lo = current.rgb, hi = current.rgb, c;\n"
+    "  NB(-1, -1) NB(0, -1) NB(1, -1) NB(-1, 0) NB(1, 0) NB(-1, 1) NB(0, 1) NB(1, 1)\n"
+    "  previous.rgb = clamp(previous.rgb, lo, hi);\n"
+    "  float delta = abs(current.a * current.a - previous.a * previous.a) / 5.0;\n"
+    "  float weight = 0.5 * saturate(1.0 - sqrt(delta) * SMAA_REPROJECTION_WEIGHT_SCALE);\n"
+    "  if (any(lessThan(at, vec2(0.0))) || any(greaterThan(at, vec2(1.0)))) weight = 0.0;\n"
+    "  weight *= 1.0 - saturate(textureLod(reactiveTex, texcoord, 0.0).r);\n"
+    "  o = vec4(mix(current.rgb, previous.rgb, weight), 1.0);\n"
+    "}\n"};
 
 static VkShaderModule module(int pass, int stage) {
     static VkShaderModule cache[NPASS][2];
     VkShaderModule *m = &cache[pass][stage == STAGE_FRAGMENT];
     if (*m) return *m;
-    char head[512], name[64];
+    char head[768], name[64];
     snprintf(head, sizeof head,
              "#version 450\n#define SMAA_GLSL_4\n#define SMAA_PRESET_ULTRA\n#define SMAA_INCLUDE_VS %d\n"
-             "#define SMAA_INCLUDE_PS %d\nlayout(push_constant) uniform P { vec4 rt; } pc;\n#define SMAA_RT_METRICS pc.rt\n",
-             stage != STAGE_FRAGMENT, stage == STAGE_FRAGMENT);
+             "#define SMAA_INCLUDE_PS %d\nlayout(push_constant) uniform P { vec4 rt, sub; } pc;\n#define SMAA_RT_METRICS pc.rt\n%s",
+             stage != STAGE_FRAGMENT, stage == STAGE_FRAGMENT,
+             pass >= BLEND_T2X ? "#define SMAA_REPROJECTION 1\n#define SMAA_DECODE_VELOCITY(s) (-(s).rg * SMAA_RT_METRICS.xy)\n" : "");
     const char *body = stage == STAGE_FRAGMENT ? fs_main[pass] : vs_main[pass];
     size_t nh = strlen(head), ns = (size_t)(smaa_hlsl_end - smaa_hlsl), nb = strlen(body);
     char *src = malloc(nh + ns + nb + 2);
@@ -97,17 +129,17 @@ static VkDescriptorSetLayout set_layout;
 static VkPipelineLayout layout;
 
 static VkPipeline pipeline(int pass, VkRenderPass rp) {
-    static struct { int pass; VkRenderPass rp; VkPipeline p; } tab[32];
+    static struct { int pass; VkRenderPass rp; VkPipeline p; } tab[64];
     static int n;
     for (int i = 0; i < n; i++)
         if (tab[i].pass == pass && tab[i].rp == rp) return tab[i].p;
     if (!layout) {
-        VkDescriptorSetLayoutBinding b[3];
-        for (uint32_t i = 0; i < 3; i++)
+        VkDescriptorSetLayoutBinding b[4];
+        for (uint32_t i = 0; i < 4; i++)
             b[i] = (VkDescriptorSetLayoutBinding){i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL};
-        VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 3, .pBindings = b};
+        VkDescriptorSetLayoutCreateInfo li = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 4, .pBindings = b};
         VK_CHECK(vkCreateDescriptorSetLayout(g_vk.dev, &li, NULL, &set_layout));
-        VkPushConstantRange r = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
+        VkPushConstantRange r = {VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32};
         VkPipelineLayoutCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
                                          .pSetLayouts = &set_layout, .pushConstantRangeCount = 1, .pPushConstantRanges = &r};
         VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &ci, NULL, &layout));
@@ -140,7 +172,7 @@ static VkPipeline pipeline(int pass, VkRenderPass rp) {
         if (vkCreateGraphicsPipelines(g_vk.dev, g_vk.pcache, 1, &pi, NULL, &p) != VK_SUCCESS) p = VK_NULL_HANDLE;
     }
     if (!p) LOG("[vk] SMAA pass %d pipeline failed\n", pass);
-    if (n < 32) tab[n].pass = pass, tab[n].rp = rp, tab[n++].p = p;  // (a failure is not retried)
+    if (n < 64) tab[n].pass = pass, tab[n].rp = rp, tab[n++].p = p;  // (a failure is not retried)
     return p;
 }
 
@@ -148,7 +180,8 @@ static VkPipeline pipeline(int pass, VkRenderPass rp) {
 static bool image(Img *m, VkFormat f, uint32_t w, uint32_t h, VkImageUsageFlags usage, const void *data, size_t bytes) {
     VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = f,
                             .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
-                            .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = usage | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                            .tiling = VK_IMAGE_TILING_OPTIMAL,
+                            .usage = usage | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                             .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
     VmaAllocationCreateInfo ai = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     if (vmaCreateImage(g_vk.vma, &ci, &ai, &m->image, &m->mem, NULL) != VK_SUCCESS) return false;
@@ -170,13 +203,15 @@ static bool image(Img *m, VkFormat f, uint32_t w, uint32_t h, VkImageUsageFlags 
     return true;
 }
 
-// The edges and blending weights of one target size (kept for the session: the game's FXAA pass has one or two).
-static struct { Img edges, weights; } sizes[4];
+// What one target size needs (kept for the session: the game draws these passes at one or two sizes): the edges, the
+// blending weights and, for T2x, two frames of history in the target's format (hist_ok: hist[cur ^ 1] holds the last).
+typedef struct { Img edges, weights, hist[2]; VkFormat hist_fmt; int cur; bool hist_ok; } Size;
+static Size sizes[4];
 
 static void pass(VkCommandBuffer cb, VkPipeline p, VkRenderPass rp, VkImageView target, uint32_t w, uint32_t h,
-                 const VkDescriptorImageInfo *in, uint32_t nin) {
+                 const VkDescriptorImageInfo *in, uint32_t nin, int subsample) {
     VkDescriptorSet set = vk_alloc_set(set_layout);
-    VkWriteDescriptorSet wr[3];
+    VkWriteDescriptorSet wr[4];
     for (uint32_t i = 0; i < nin; i++)
         wr[i] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = set, .dstBinding = i,
                                        .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -185,11 +220,13 @@ static void pass(VkCommandBuffer cb, VkPipeline p, VkRenderPass rp, VkImageView 
     VkRect2D area = {{0, 0}, {w, h}};
     VkRenderPassBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = rp,
                                 .framebuffer = vk_framebuffer(rp, &target, 1, w, h), .renderArea = area};
-    float rt[4] = {1.0f / (float)w, 1.0f / (float)h, (float)w, (float)h};
+    // subsampleIndices (SMAA.hlsl @SUBSAMPLE_INDICES): 1x 0; T2x (1, 1, 1, 0) for the first jitter, (2, 2, 2, 0) the second
+    float s = subsample < 0 ? 0.0f : (float)(subsample + 1);
+    float pc[8] = {1.0f / (float)w, 1.0f / (float)h, (float)w, (float)h, s, s, s, 0.0f};
     vkCmdBeginRenderPass(cb, &bi, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, NULL);
-    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof rt, rt);
+    vkCmdPushConstants(cb, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, pc);
     VkViewport vp = {0, 0, (float)w, (float)h, 0, 1};
     vkCmdSetViewport(cb, 0, 1, &vp);
     vkCmdSetScissor(cb, 0, 1, &area);
@@ -198,47 +235,111 @@ static void pass(VkCommandBuffer cb, VkPipeline p, VkRenderPass rp, VkImageView 
     vk_full_barrier(cb);
 }
 
-bool vk_smaa(const VkPostAa *t) {
-    static Img area, search;
+static Img area, search, still;  // the lookup textures; still: one texel of zero motion (a resolve without history)
+
+// The lookup textures, the images of t's size and the passes' pipelines (T2x: with the history and its two passes).
+static Size *prepare(const VkPostAa *t, bool t2x, VkPipeline p[NPASS], VkRenderPass rp[NPASS]) {
     static bool tables_failed;
+    static const uint8_t zero[4] = {0};
     if (!area.view && !tables_failed)
         tables_failed = !image(&area, VK_FORMAT_R8G8_UNORM, AREATEX_WIDTH, AREATEX_HEIGHT, 0, areaTexBytes, sizeof areaTexBytes) ||
-                        !image(&search, VK_FORMAT_R8_UNORM, SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT, 0, searchTexBytes, sizeof searchTexBytes);
-    if (tables_failed) return false;
+                        !image(&search, VK_FORMAT_R8_UNORM, SEARCHTEX_WIDTH, SEARCHTEX_HEIGHT, 0, searchTexBytes, sizeof searchTexBytes) ||
+                        !image(&still, VK_FORMAT_R8G8_UNORM, 1, 1, 0, zero, 2);
+    if (tables_failed) return NULL;
     int k = 0;
     while (k < 4 && sizes[k].edges.view && (sizes[k].edges.w != t->w || sizes[k].edges.h != t->h)) k++;
-    if (k == 4) return false;
-    if (!sizes[k].edges.view) {
-        const VkImageUsageFlags rt = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-        if (!image(&sizes[k].edges, VK_FORMAT_R8G8_UNORM, t->w, t->h, rt, NULL, 0) ||
-            !image(&sizes[k].weights, VK_FORMAT_R8G8B8A8_UNORM, t->w, t->h, rt, NULL, 0)) {
-            LOG("[vk] SMAA: no images for %ux%u\n", t->w, t->h);
-            return false;
-        }
+    if (k == 4) return NULL;
+    Size *z = &sizes[k];
+    const VkImageUsageFlags rt = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    if (!z->edges.view && (!image(&z->edges, VK_FORMAT_R8G8_UNORM, t->w, t->h, rt, NULL, 0) ||
+                           !image(&z->weights, VK_FORMAT_R8G8B8A8_UNORM, t->w, t->h, rt, NULL, 0))) {
+        LOG("[vk] SMAA: no images for %ux%u\n", t->w, t->h);
+        return NULL;
     }
-    Img *edges = &sizes[k].edges, *weights = &sizes[k].weights;
+    if (t2x && z->hist[0].view && z->hist_fmt != t->format) z->hist[0].view = z->hist[1].view = VK_NULL_HANDLE;  // (remade below)
+    if (t2x && !z->hist[0].view) {
+        if (!image(&z->hist[0], t->format, t->w, t->h, rt, NULL, 0) || !image(&z->hist[1], t->format, t->w, t->h, rt, NULL, 0)) {
+            LOG("[vk] SMAA T2x: no history images for %ux%u\n", t->w, t->h);
+            return NULL;
+        }
+        z->hist_fmt = t->format, z->hist_ok = false;
+    }
     VkFormat rg8 = VK_FORMAT_R8G8_UNORM, rgba8 = VK_FORMAT_R8G8B8A8_UNORM;
-    VkRenderPass rp[NPASS] = {vk_render_pass(&rg8, 1, VK_FORMAT_UNDEFINED, 1), vk_render_pass(&rgba8, 1, VK_FORMAT_UNDEFINED, 1),
-                              vk_render_pass(&t->format, 1, VK_FORMAT_UNDEFINED, 1)};
-    VkPipeline p[NPASS];
+    rp[EDGES] = vk_render_pass(&rg8, 1, VK_FORMAT_UNDEFINED, 1);
+    rp[WEIGHTS] = vk_render_pass(&rgba8, 1, VK_FORMAT_UNDEFINED, 1);
+    rp[BLEND] = rp[BLEND_T2X] = rp[RESOLVE] = vk_render_pass(&t->format, 1, VK_FORMAT_UNDEFINED, 1);
     for (int i = 0; i < NPASS; i++)
-        if (!(p[i] = pipeline(i, rp[i]))) return false;
-    VkSampler linear = vk_default_sampler(true), point = vk_default_sampler(false);
-    VkCommandBuffer cb = vk_cmd();
-    vk_full_barrier(cb);
+        if ((t2x || i <= BLEND) && !(p[i] = pipeline(i, rp[i]))) return NULL;
+    return z;
+}
+
+// Edges and blending weights of src (subsample: -1 for 1x, else the T2x jitter's 0 / 1).
+static void edges_and_weights(VkCommandBuffer cb, Size *z, const VkPipeline *p, const VkRenderPass *rp, VkImageView src,
+                              int subsample) {
     VkClearColorValue zero = {{0, 0, 0, 0}};
     VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(cb, edges->image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &all);
+    vkCmdClearColorImage(cb, z->edges.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &all);
     vk_full_barrier(cb);
-    VkDescriptorImageInfo color = {linear, t->src, VK_IMAGE_LAYOUT_GENERAL};
-    pass(cb, p[EDGES], rp[EDGES], edges->view, t->w, t->h, &color, 1);
-    VkDescriptorImageInfo tables[3] = {{linear, edges->view, VK_IMAGE_LAYOUT_GENERAL},
+    VkSampler linear = vk_default_sampler(true), point = vk_default_sampler(false);
+    VkDescriptorImageInfo color = {linear, src, VK_IMAGE_LAYOUT_GENERAL};
+    pass(cb, p[EDGES], rp[EDGES], z->edges.view, z->edges.w, z->edges.h, &color, 1, subsample);
+    VkDescriptorImageInfo tables[3] = {{linear, z->edges.view, VK_IMAGE_LAYOUT_GENERAL},
                                        {linear, area.view, VK_IMAGE_LAYOUT_GENERAL},
                                        {point, search.view, VK_IMAGE_LAYOUT_GENERAL}};
-    pass(cb, p[WEIGHTS], rp[WEIGHTS], weights->view, t->w, t->h, tables, 3);
-    VkDescriptorImageInfo blend[2] = {color, {linear, weights->view, VK_IMAGE_LAYOUT_GENERAL}};
-    pass(cb, p[BLEND], rp[BLEND], t->dst, t->w, t->h, blend, 2);
+    pass(cb, p[WEIGHTS], rp[WEIGHTS], z->weights.view, z->edges.w, z->edges.h, tables, 3, subsample);
+}
+
+
+bool vk_smaa(const VkPostAa *t) {
+    VkPipeline p[NPASS];
+    VkRenderPass rp[NPASS];
+    Size *z = prepare(t, false, p, rp);
+    if (!z) return false;
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    edges_and_weights(cb, z, p, rp, t->src, -1);
+    VkSampler linear = vk_default_sampler(true);
+    VkDescriptorImageInfo blend[2] = {{linear, t->src, VK_IMAGE_LAYOUT_GENERAL}, {linear, z->weights.view, VK_IMAGE_LAYOUT_GENERAL}};
+    pass(cb, p[BLEND], rp[BLEND], t->dst, t->w, t->h, blend, 2, -1);
     static bool logged;
     if (!logged) logged = true, LOG("[vk] SMAA 1x draws in place of the game's FXAA, %ux%u\n", t->w, t->h);
+    return true;
+}
+
+bool vk_smaa_t2x(const VkPostAa *t, VkImageView velocity, VkImageView reactive, int phase, bool history) {
+    VkPipeline p[NPASS];
+    VkRenderPass rp[NPASS];
+    Size *z = prepare(t, true, p, rp);
+    if (!z) return false;
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    VkSampler linear = vk_default_sampler(true), point = vk_default_sampler(false);
+    Img *cur = &z->hist[z->cur], *prev = &z->hist[z->cur ^ 1];
+    if (phase < 0) {  // no jitter, no vectors this frame: SMAA 1x of the image, through the history image (in place)
+        edges_and_weights(cb, z, p, rp, t->src, -1);
+        VkDescriptorImageInfo blend[2] = {{linear, t->src, VK_IMAGE_LAYOUT_GENERAL}, {linear, z->weights.view, VK_IMAGE_LAYOUT_GENERAL}};
+        pass(cb, p[BLEND], rp[BLEND], cur->view, t->w, t->h, blend, 2, -1);
+        VkImageCopy c = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                         .extent = {t->w, t->h, 1}};
+        vkCmdCopyImage(cb, cur->image, VK_IMAGE_LAYOUT_GENERAL, t->dst_image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        vk_full_barrier(cb);
+        z->hist_ok = false;
+        return true;
+    }
+    edges_and_weights(cb, z, p, rp, t->src, phase);
+    VkDescriptorImageInfo blend[3] = {{linear, t->src, VK_IMAGE_LAYOUT_GENERAL},
+                                      {linear, z->weights.view, VK_IMAGE_LAYOUT_GENERAL},
+                                      {linear, velocity, VK_IMAGE_LAYOUT_GENERAL}};
+    pass(cb, p[BLEND_T2X], rp[BLEND_T2X], cur->view, t->w, t->h, blend, 3, phase);
+    bool use_prev = history && z->hist_ok;  // (else the resolve blends this frame with itself: just this frame)
+    VkDescriptorImageInfo resolve[4] = {{point, cur->view, VK_IMAGE_LAYOUT_GENERAL},
+                                        {linear, use_prev ? prev->view : cur->view, VK_IMAGE_LAYOUT_GENERAL},
+                                        {point, use_prev ? velocity : still.view, VK_IMAGE_LAYOUT_GENERAL},
+                                        {linear, reactive ? reactive : still.view, VK_IMAGE_LAYOUT_GENERAL}};
+    pass(cb, p[RESOLVE], rp[RESOLVE], t->dst, t->w, t->h, resolve, 4, phase);
+    z->cur ^= 1;
+    z->hist_ok = true;
+    static bool logged;
+    if (!logged) logged = true, LOG("[vk] SMAA T2x on the full-screen image, %ux%u\n", t->w, t->h);
     return true;
 }

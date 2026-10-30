@@ -315,3 +315,8 @@ camera and from moving objects, the scene depth, the reactive and animated-surfa
 output size), the texture LOD bias and the output-size handling (`runtime/nvn/vulkan/fsr.c`, `textures.c`) are what any temporal upscaler
 needs. The upscaler itself is called from one place: `run_fsr` in `fsr.c` prepares the inputs and then records the FSR 3.1 dispatch. A DLSS backend (NVIDIA, via NGX or Streamline on
 Vulkan) could be added the same way by someone with an NVIDIA RTX card. The author has no such card, so it is neither implemented nor tested.
+
+SMAA T2x (`[Anti-aliasing] AntiAliasing = SMAAT2x`, docs/STATUS.md) uses that preparation at the render size: `frame_vectors` (the prep,
+object motion and finish steps `run_fsr` runs first) and then `run_t2x` instead of an upscaler, in place, without stand-ins. For it the
+main camera's hooks are always in (`camjit_init`; without jitter they only record the camera), and `vk_fsr_present` is called every frame
+(it returns at once while neither FSR nor T2x runs).

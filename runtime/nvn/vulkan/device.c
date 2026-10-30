@@ -916,7 +916,7 @@ void backend_present(NvnTexture *t) {
     vi_apply_framerate();
     vk_lock();
     if (vk_hdr_tracking()) vk_hdr_present(t);  // (HDR: learns the frame's full-screen image, hdr.c)
-    if (g_fsr_on) t = vk_fsr_present(t);  // FSR: its output-size picture with the HUD (fsr.c)
+    t = vk_fsr_present(t);  // FSR: its output-size picture with the HUD; SMAA T2x starts / stops here (fsr.c)
     TexBackend *b = vk_tex(t, true);
     b->presented = true;
     vk_end_pass();

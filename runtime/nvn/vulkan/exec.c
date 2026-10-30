@@ -2253,6 +2253,7 @@ typedef struct {
     bool wanted;            // (under ready_lock) a draw needs it: a prewarm build goes on to make its modules
     struct Pipe *prewarm;   // pipelines of earlier runs to build once this is (pipeline cache)
     FsrCapProg *fsrcap;     // FSR object motion: the capture variant of its vertex shader (fsr.c)
+    bool capprog_asked;     // (draw thread) capprog_later tried to make fsrcap
 } Prog;
 static void prewarm_pipelines(Prog *p);
 
@@ -2471,6 +2472,21 @@ static void load_program(void *arg) {
     p->vi->msl = vs;
     p->fi->msl = fs;
     compile_program(p);
+}
+
+// Object motion turned on after p was built (SMAA T2x picked in the menu): its capture variant from the vertex source
+// the program cache keeps (NULL: none; asked once).
+static FsrCapProg *capprog_later(Prog *p) {
+    if (p->capprog_asked || !p->src_saved) return NULL;
+    p->capprog_asked = true;
+    char *vs = malloc(p->vlen + 1);
+    if (!vs) return NULL;
+    pthread_mutex_lock(&progcache_rlock);
+    bool ok = progcache_rf && !fseek(progcache_rf, p->src_off, SEEK_SET) && fread(vs, 1, p->vlen, progcache_rf) == p->vlen;
+    pthread_mutex_unlock(&progcache_rlock);
+    if (ok) vs[p->vlen] = 0, p->fsrcap = vk_fsr_capprog_new(vs);
+    free(vs);
+    return p->fsrcap;
 }
 
 static void progcache_open(void) {
@@ -3863,7 +3879,8 @@ static void post_aa_drawn(void) {
 }
 
 // FXAA off (settings): the game's FXAA pass (recognised by its shader) copies its input instead; FXAAMode = 3_11 draws
-// FXAA 3.11 there (fxaa_311); AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c).
+// FXAA 3.11 there (fxaa_311); AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c), SMAAT2x copies its
+// input too, the jittered camera's frames resolved at the start of the HUD instead (fsr.c).
 static void copy_texture(const TexRef *src, const TexRef *dst, uint64_t flags);
 static bool fxaa_skipped(Prog *pr) {
     if (prog_fs_hash(pr) == FXAA_FS_HASH) {
@@ -3877,6 +3894,7 @@ static bool fxaa_skipped(Prog *pr) {
         return false;
     NvnTexture *src = shader_texture_object(1, &pr->fi->tex[0]);
     if (!src || src == st.rt.color[0]) return false;
+    if (aa == AA_SMAA_T2X && !g_temporal_on) aa = AA_SMAA;  // (until T2x runs, from the next frame on: SMAA 1x)
     if (aa == AA_SMAA) {  // (not possible: the game's own pass draws)
         VkPostAa t;
         if (!post_aa_target(src, &t) || !vk_smaa(&t)) return false;
@@ -3884,11 +3902,12 @@ static bool fxaa_skipped(Prog *pr) {
         gp_next_note = "";
         return true;
     }
-    if (fxaa_311_on) {
+    if (aa == AA_FXAA && fxaa_311_on) {
         if (!fxaa_311(src)) return false;
         gp_next_note = "";
         return true;
     }
+    // (FXAA off, or SMAA T2x running: it resolves at the start of the HUD instead, fsr.c) the input copied
     TexRef s = {.tex = (uint64_t)(uintptr_t)src}, d = {.tex = (uint64_t)(uintptr_t)st.rt.color[0]};
     if (st.rt.has_cview[0]) d.view = st.rt.cview[0], d.has_view = 1;
     copy_texture(&s, &d, 0);
@@ -3976,7 +3995,7 @@ static void draw(CmdRec *r, bool indexed) {
     if (!pr) { stat_skipped++; return; }
     if (!await_build(&pr->state, pr, 0)) { skip_draw(&stat_skip_prog); return; }
     FsrDraw fd = {0};
-    if (g_fsr_on || vk_hdr_tracking()) {  // FSR / HDR: the frame's structure (fsr.c, hdr.c)
+    if (g_temporal_on || vk_hdr_tracking()) {  // FSR / SMAA T2x / HDR: the frame's structure (fsr.c, hdr.c)
         fd = (FsrDraw){.color0 = st.rt.ncolor ? st.rt.color[0] : NULL, .depth = st.rt.depth, .count = (uint32_t)r->x[2],
                        .depth_write = st.ds[0] && st.ds[1], .vubuf = &st.ubuf[0][0].addr, .nvubuf = 18,
                        .vp_w = st.viewport[0][2], .vp_h = st.viewport[0][3]};
@@ -3999,7 +4018,7 @@ static void draw(CmdRec *r, bool indexed) {
     VkPrimitiveTopology topo;
     bool native = topology(mode, &topo);
     if (!native && mode != 6 && mode != 7 && mode != 9) { stat_skipped++; return; }
-    if (g_fsr_on) vk_fsr_draw(&fd);  // FSR: at the start of the HUD it runs before this draw (fsr.c)
+    if (g_temporal_on) vk_fsr_draw(&fd);  // FSR / SMAA T2x: at the start of the HUD they run before this draw (fsr.c)
 
     ms_want_depth = st.ds[0] && st.rt.depth;  // (MSAA, a picture 3D models are drawn into: pass_models)
     if (in_pass && pass_models && !pass_msaa && ms_want_depth && !pass_want_depth) st.rt_dirty = true;
@@ -4335,9 +4354,11 @@ static void draw(CmdRec *r, bool indexed) {
     if (!use_index) vkCmdDraw(cb, count, inst, first, base_inst);
     else vkCmdDrawIndexed(cb, icount, inst, 0, base_vertex, base_inst);
     stat_draws++;
-    if (g_fsr_objvel && pr->fsrcap && (k.depth_write || (k.depth_test && pr->vi->cbuf_dynamic)) && inst == 1 && pass_samples == 1) {
+    if (g_fsr_objvel && g_temporal_on && (pr->fsrcap || capprog_later(pr)) &&
+        (k.depth_write || (k.depth_test && pr->vi->cbuf_dynamic)) && inst == 1) {
         // FSR object motion: the same draw again through the capture variant of its vertex shader (rasterizer
-        // discard), which stores each vertex's clip position for the velocity pass (fsr.c)
+        // discard), which stores each vertex's clip position for the velocity pass (fsr.c). MSAA passes too (SMAA
+        // T2x): with rasterization discarded the pipeline has no sample count to match.
         FsrCapture fc = {.color0 = st.rt.ncolor ? st.rt.color[0] : NULL, .depth = st.rt.depth, .vs_code = st.program->stages[0].code_addr,
                          .used_streams = k.used_streams, .iaddr = indexed ? r->x[3] : 0, .mode = mode, .count = count,
                          .first = first, .base_vertex = base_vertex, .idx = use_index ? ib.ptr : NULL, .itype = itype_vk,

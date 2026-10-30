@@ -53,8 +53,10 @@
 #include "shaders.h"
 
 bool g_fsr_on;
+bool g_temporal_on;
 
-static uint32_t rw, rh, ow, oh;  // render size, output size
+static uint32_t rw, rh, ow, oh;  // render size, output size (SMAA T2x: both the render size)
+static bool t2x_on, t2x_ready, t2x_failed;  // SMAA T2x runs (fsr.h g_temporal_on); its images and pipelines are made / could not be
 static bool logging;
 
 // ================================================================== stand-ins (the output-size images)
@@ -1119,6 +1121,7 @@ static FfxVkPortableImage ffx_image(TexBackend *b, VkImageUsageFlags usage) {
 static NvnTexture *g_h;                        // the full-screen image (learnt at the presents)
 static NvnTexture *last_target, *last_src;     // the frame's last draw: its target, the first texture it sampled
 static bool frame_open, redirect, frame_fsr;   // a draw seen since the present; from the start of the HUD on; FSR ran
+static bool hud_seen;                           // the start of the HUD was this frame (FSR: redirect too; T2x: not)
 static uint32_t h_draws;                       // draws into H so far (post passes)
 static struct { NvnTexture *t; uint32_t n; } depths[4];
 static NvnTexture *mask_first;                 // the first render-size colour target drawn with depth (frame_mask)
@@ -1461,7 +1464,7 @@ static void frame_begin(void) {
     menu_models_late = menu_2d && menu_2d_scene < 16 ? menu_models : 0;
     menu_cams_late = menu_cams;
     menu_2d = false, menu_2d_scene = menu_models = menu_cams = 0;
-    redirect = frame_fsr = false;
+    redirect = hud_seen = frame_fsr = false;
     h_draws = 0;
     memset(depths, 0, sizeof depths);
     matched_seq = 0;
@@ -1497,24 +1500,14 @@ static void scale_to_stand(NvnTexture *h, NvnTexture *hs) {
     vk_full_barrier(cb);
 }
 
-// prep + FSR: H -> H'. false: not done (H' untouched).
-static bool run_fsr(NvnTexture *h, NvnTexture *hs, NvnTexture *depth, NvnTexture *mask, const CamRecord *cam) {
-    if (!ctx_make()) return false;
-    TexBackend *hb = vk_tex(h, true), *db = vk_tex(depth, true), *ob = hs->backend;
-    if (hb->width != rw || hb->height != rh || db->width != rw || db->height != rh) {
-        static int nlog;
-        if (nlog++ < 20) LOG("[fsr] not upscaled: the picture (%ux%u) or depth (%ux%u) is not %ux%u\n", hb->width, hb->height,
-                             db->width, db->height, rw, rh);
-        return false;
-    }
-    // [Upscaler] Sharpness and Reactive as they are now (a Save in the settings menu changes them between frames)
-    float sharpness = config_live_fsr_sharpness(), reactive = config_live_fsr_reactive();
-    static float logged_sharpness = -1.0f, logged_reactive = -1.0f;
-    if (sharpness != logged_sharpness || reactive != logged_reactive) {
-        if (logged_sharpness >= 0.0f) LOG("[live] FSR sharpness %.2f, reactive %.2f\n", sharpness, reactive);
-        logged_sharpness = sharpness, logged_reactive = reactive;
-    }
-    // camera motion vectors from the previous FSR frame's camera; history reset at a cut
+// The frame's motion vectors for FSR and SMAA T2x (img_mvf, render size, from the camera of the last such frame):
+// prep (the scene depth, the camera's vectors), object motion, animated surfaces (with_anim: FSR's) and finish (and
+// the reactive mask). out->reset: no last frame to continue (a cut, a gap, another camera). false: not possible.
+typedef struct { bool reset, objv, anim, react; } Vectors;
+static bool frame_vectors(VkCommandBuffer cb, TexBackend *hb, TexBackend *db, NvnTexture *mask, const CamRecord *cam,
+                          bool with_anim, Vectors *out) {
+    float reactive = config_live_fsr_reactive();
+    // camera motion vectors from the previous frame's camera; history reset at a cut
     bool reset = !prev_cam.seq || prev_fsr_present + 1 < g_present_count || prev_cam.cam != cam->cam;
     double e0[3], e1[3];
     eye_of(cam, e1);
@@ -1536,8 +1529,6 @@ static bool run_fsr(NvnTexture *h, NvnTexture *hs, NvnTexture *depth, NvnTexture
             reset = true;
         }
     }
-    VkCommandBuffer cb = vk_cmd();
-    vk_full_barrier(cb);
     // 1. prep
     static const VkComponentMapping id = {0};
     VkDescriptorSet set = vk_alloc_set(prep_set_layout);
@@ -1567,7 +1558,7 @@ static bool run_fsr(NvnTexture *h, NvnTexture *hs, NvnTexture *depth, NvnTexture
     float jd[2] = {reset ? 0.0f : prev_cam.jitter[0] - cam->jitter[0], reset ? 0.0f : prev_cam.jitter[1] - cam->jitter[1]};
     TexBackend *mb = mask ? vk_tex(mask, true) : NULL;
     if (mb && (mb->aspect != VK_IMAGE_ASPECT_COLOR_BIT || mb->samples != 1)) mb = NULL;
-    bool anim = anim_pass(cb, hb, mb, !reset, objv, jd, cam);
+    bool anim = with_anim && anim_pass(cb, hb, mb, !reset, objv, jd, cam);
     // 1d. finish: the vectors FSR gets (object over camera) and the reactive mask
     sil_cur ^= 1;
     struct { float strength, vel_cap; uint32_t flags; float pad; } fp = {
@@ -1585,6 +1576,32 @@ static bool run_fsr(NvnTexture *h, NvnTexture *hs, NvnTexture *depth, NvnTexture
     if (objv) n_objv_frames++;
     if (react) n_react_frames++;
     mv_check(cb, hb, &img_sil[sil_cur], !reset && prev_in_ok, jd);  // ((debug) MHGU_FSR_MVCHECK)
+    *out = (Vectors){reset, objv, anim, react};
+    return true;
+}
+
+// prep + FSR: H -> H'. false: not done (H' untouched).
+static bool run_fsr(NvnTexture *h, NvnTexture *hs, NvnTexture *depth, NvnTexture *mask, const CamRecord *cam) {
+    if (!ctx_make()) return false;
+    TexBackend *hb = vk_tex(h, true), *db = vk_tex(depth, true), *ob = hs->backend;
+    if (hb->width != rw || hb->height != rh || db->width != rw || db->height != rh) {
+        static int nlog;
+        if (nlog++ < 20) LOG("[fsr] not upscaled: the picture (%ux%u) or depth (%ux%u) is not %ux%u\n", hb->width, hb->height,
+                             db->width, db->height, rw, rh);
+        return false;
+    }
+    // [Upscaler] Sharpness and Reactive as they are now (a Save in the settings menu changes them between frames)
+    float sharpness = config_live_fsr_sharpness(), reactive = config_live_fsr_reactive();
+    static float logged_sharpness = -1.0f, logged_reactive = -1.0f;
+    if (sharpness != logged_sharpness || reactive != logged_reactive) {
+        if (logged_sharpness >= 0.0f) LOG("[live] FSR sharpness %.2f, reactive %.2f\n", sharpness, reactive);
+        logged_sharpness = sharpness, logged_reactive = reactive;
+    }
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    Vectors v;
+    if (!frame_vectors(cb, hb, db, mask, cam, true, &v)) return false;
+    bool reset = v.reset, anim = v.anim, react = v.react;
     // 2. FSR
     uint64_t now = plat_now_ns();
     float dt = last_dispatch_ns ? (float)((now - last_dispatch_ns) / 1e6) : 16.7f;
@@ -1643,12 +1660,80 @@ static bool run_fsr(NvnTexture *h, NvnTexture *hs, NvnTexture *depth, NvnTexture
     return true;
 }
 
-// The start of the HUD: FSR (or scaling) into H', then H, P, D are replaced from here on.
+// ---- SMAA T2x ([Anti-aliasing] AntiAliasing = SMAAT2x; smaa.c): at the start of the HUD, on H in place (no stand-ins:
+// the picture keeps its size), with this frame's jitter and the motion vectors as for FSR.
+static bool t2x_target(NvnTexture *h, VkPostAa *t) {
+    TexBackend *b = vk_tex(h, true);
+    vk_ms_resolve(b);
+    t->src = vk_view(h, NULL, false, false, TEXTYPE_2D);
+    t->dst = vk_view(h, NULL, false, true, TEXTYPE_2D);
+    t->dst_image = b->image, t->format = b->format, t->w = b->width, t->h = b->height;
+    return t->src && t->dst && b->samples == 1;
+}
+
+static bool run_t2x(NvnTexture *h, NvnTexture *depth, NvnTexture *mask, const CamRecord *cam) {
+    TexBackend *hb = vk_tex(h, true), *db = vk_tex(depth, true);
+    if (hb->width != rw || hb->height != rh || db->width != rw || db->height != rh) {
+        static int nlog;
+        if (nlog++ < 20) LOG("[t2x] not this frame: the picture (%ux%u) or depth (%ux%u) is not %ux%u\n", hb->width, hb->height,
+                             db->width, db->height, rw, rh);
+        return false;
+    }
+    VkPostAa t;
+    if (!t2x_target(h, &t)) return false;
+    vk_ms_resolve(db);  // (MSAA: the scene depth and the mask up to date; usually already, the game's post read them)
+    if (mask) vk_ms_resolve(vk_tex(mask, true));
+    // [Upscaler] Sharpness and Reactive as they are now (a Save in the settings menu changes them between frames)
+    float sharpness = config_live_fsr_sharpness(), reactive = config_live_fsr_reactive();
+    static float logged_sharpness = -1.0f, logged_reactive = -1.0f;
+    if (sharpness != logged_sharpness || reactive != logged_reactive) {
+        if (logged_sharpness >= 0.0f) LOG("[live] FSR sharpness %.2f, reactive %.2f\n", sharpness, reactive);
+        logged_sharpness = sharpness, logged_reactive = reactive;
+    }
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    Vectors v;
+    if (!frame_vectors(cb, hb, db, mask, cam, false, &v)) return false;
+    if (check_pipe) prev_store(cb, hb);  // ((debug) MHGU_FSR_MVCHECK: this frame's input, before T2x writes over it)
+    static const VkComponentMapping id = {0};
+    VkImageView mv = vk_image_view(&img_mvf, VK_IMAGE_VIEW_TYPE_2D, img_mvf.format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+    VkImageView react = v.react ? vk_image_view(&img_react, VK_IMAGE_VIEW_TYPE_2D, img_react.format, 0, 1, 0, 1, id,
+                                                VK_IMAGE_ASPECT_COLOR_BIT) : VK_NULL_HANDLE;
+    if (!mv || !vk_smaa_t2x(&t, mv, react, camjit_t2x_phase(cam->jitter), !v.reset)) return false;
+    hb->ms_valid = false;
+    if (v.reset) n_reset++;
+    prev_cam = *cam;
+    prev_fsr_present = g_present_count;
+    return true;
+}
+
+static void t2x_hud_start(void) {
+    uint32_t dn = 0;
+    NvnTexture *depth = scene_depth(&dn);
+    CamRecord cam;
+    bool have_cam = frame_camera(&cam);
+    frame_fsr = depth && dn >= 16 && have_cam && run_t2x(g_h, depth, frame_mask(), &cam);
+    VkPostAa t;
+    if (!frame_fsr && t2x_target(g_h, &t)) vk_smaa_t2x(&t, VK_NULL_HANDLE, VK_NULL_HANDLE, -1, false);  // (SMAA 1x)
+    static int last = -1, nlog;
+    if ((int)frame_fsr != last && nlog++ < 500)
+        LOG("[t2x] frame %llu: %s\n", (unsigned long long)g_present_count + 1,
+            frame_fsr ? "SMAA T2x" : !depth || dn < 16 ? "SMAA 1x: no 3D scene this frame" : "SMAA 1x: the main camera was not computed");
+    last = frame_fsr;
+}
+
+// The start of the HUD: FSR (or scaling) into H', then H, P, D are replaced from here on (SMAA T2x: in H, nothing replaced).
 static void hud_start(const char *why) {
     vk_end_pass();
+    if (!g_fsr_on) {
+        hud_seen = true;
+        t2x_hud_start();
+        if (logging) snprintf(why_last, sizeof why_last, "%s, %u post draws before it", why, h_draws);
+        return;
+    }
     NvnTexture *hs = stand(&st_h, g_h, ow, oh, true);
     if (!hs) return;
-    redirect = true;
+    redirect = hud_seen = true;
     uint32_t dn = 0;
     NvnTexture *depth = scene_depth(&dn);
     CamRecord cam;
@@ -1704,7 +1789,7 @@ void vk_fsr_draw(const FsrDraw *d) {
         if (main_camera_draw(d)) menu_models++;  // (menus, see the top)
         else if (menu_camera_draw(d)) menu_cams++;
     }
-    if (redirect || !g_h || !d->color0) return;
+    if (hud_seen || !g_h || !d->color0) return;
     if (d->color0 == g_h) {
         bool post = d->count <= 6;
         bool reads_rt = false;
@@ -1742,7 +1827,46 @@ NvnTexture *vk_fsr_map(NvnTexture *t, bool depth) {
 
 bool vk_fsr_input(NvnTexture *t) { return g_fsr_on && t == g_h; }
 
+// SMAA T2x's images and pipelines (the motion vectors' as for FSR, at the render size), made the first time it is picked.
+static bool t2x_init(void) {
+    rw = ow = g_render_size[0], rh = oh = g_render_size[1];
+    logging = getenv("MHGU_FSR_LOG") != NULL;
+    VkPhysicalDeviceFeatures f;
+    vkGetPhysicalDeviceFeatures(g_vk.phys, &f);
+    g_fsr_objvel = f.vertexPipelineStoresAndAtomics && f.fragmentStoresAndAtomics;  // (device.c enables both where it can)
+    if (!prep_init()) {
+        LOG("[t2x] the motion vectors' shaders could not be built: SMAA 1x instead\n");
+        g_fsr_objvel = false;
+        return false;
+    }
+    LOG("[t2x] SMAA T2x ready at %ux%u, object motion %s\n", rw, rh, g_fsr_objvel ? "on" : "off (camera motion only)");
+    return true;
+}
+
+// Without FSR, once a frame: SMAA T2x starts (from the next frame on) or stops as [Anti-aliasing] AntiAliasing says
+// (live: the settings menu). true while it runs.
+static bool t2x_present(void) {
+    bool want = config_live_aa() == AA_SMAA_T2X;
+    if (want && !t2x_ready && !t2x_failed) t2x_ready = !(t2x_failed = !t2x_init());
+    want = want && t2x_ready;
+    if (want == t2x_on) return want;
+    t2x_on = g_temporal_on = want;
+    camjit_t2x(want);
+    if (want) {
+        not_scene = 0;
+    } else {  // (the next T2x frame starts afresh: no history, no jitter until it runs)
+        camjit_set(false, rw, rh, 2);
+        jitter_on = false;
+        prev_cam.seq = 0;
+        frame_open = redirect = hud_seen = frame_fsr = false;
+        last_target = last_src = NULL;
+    }
+    LOG("[t2x] SMAA T2x %s\n", want ? "on" : "off");
+    return want;
+}
+
 NvnTexture *vk_fsr_present(NvnTexture *t) {
+    if (!g_fsr_on && !t2x_present()) return t;
     NvnTexture *show = t;
     if (redirect) {
         if (t == g_h) show = &st_h.fake;
@@ -1842,7 +1966,7 @@ NvnTexture *vk_fsr_present(NvnTexture *t) {
         log_t0 = now;
     }
     frame_open = false;
-    redirect = false;
+    redirect = hud_seen = false;
     frame_fsr = false;
     last_target = last_src = NULL;
     return show;
@@ -1869,7 +1993,7 @@ void vk_fsr_init(void) {
                 "camera motion only (the reactive mask still covers moving objects)\n");
     }
     if (!prep_init()) { LOG("[fsr] the prep shader could not be built: FSR off\n"); g_fsr_objvel = false; return; }
-    g_fsr_on = true;
+    g_fsr_on = g_temporal_on = true;
     camjit_set(false, rw, rh, 8);
     LOG("[fsr] on (FSR 3.1): %ux%u -> %ux%u, sharpness %.2f, fp16 %d, object motion %s, reactive %.2f\n",
         rw, rh, ow, oh, g_config.fsr_sharpness, g_vk.fsr_fp16, g_fsr_objvel ? "on" : "off", g_config.fsr_reactive);
