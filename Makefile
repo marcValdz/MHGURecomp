@@ -251,8 +251,9 @@ RTFLAGS  += -I$(FSR)/include -Ithird_party/ffx-api
 # all of that code out: nothing of AMD's is touched, and FSR 4 is only used through a loader DLL the player supplies (else FSR 3.1).
 FSR4_DRIVER_PATCH ?= 0
 # FSR4_DX12_BRIDGE=1 (opt-in): FSR 4 from a DX12 upscaler DLL the player supplies, run on a D3D12 device on the same GPU, for
-# GPUs whose Vulkan driver has no FSR 4 (runtime/nvn/vulkan/fsr4.c, route 3). 0 (default): none of that code is built.
-FSR4_DX12_BRIDGE ?= 0
+# GPUs whose Vulkan driver has no FSR 4 (runtime/nvn/vulkan/fsr4.c, route 3). 0: none of that code is built.
+# (personal: on by default)
+FSR4_DX12_BRIDGE ?= 1
 .DEFAULT_GOAL := all
 # CMAA2 (runtime/nvn/vulkan/cmaa2.c): third_party/cmaa2/CMAA2.hlsl, embedded with .incbin, compiled from the HLSL at run
 # time; Apache-2.0, from github.com/GameTechDev/CMAA2 with two changes for glslang (marked at its top).
