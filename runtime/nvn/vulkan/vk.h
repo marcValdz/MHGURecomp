@@ -107,6 +107,8 @@ void vk_end_pass(void);
      VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT |                       \
      VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT)
 void vk_submit_extra(VkSemaphore wait, VkSemaphore signal);  // submit (with binary semaphores for presentation)
+// submit, also signalling the timeline semaphore sem = value; the next submission waits for sem = then (fsr4.c: D3D12)
+void vk_submit_handoff(VkSemaphore sem, uint64_t value, uint64_t then);
 
 // Transient GPU-visible memory that lives until the submission it was allocated for completes.
 typedef struct { VkBuffer buf; uint64_t off; void *ptr; } VkSpan;

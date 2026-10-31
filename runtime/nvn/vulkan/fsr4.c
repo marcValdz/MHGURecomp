@@ -12,11 +12,17 @@
 // Route 2 ("loader"): AMD's own FidelityFX loader amd_fidelityfx_vk.dll that the player supplies (beside the exe, or
 // MHGU_FSR4_LOADER=<path>), used through the public ffx-api (ffxQuery / ffxCreateContext / ffxDispatch): no patching.
 // UNVERIFIED: no loader that offers FSR 4 was available to test with (see docs/FSR4-PORT.md).
-// Neither route: FSR 3.1 (fsr.c).
+// Route 3 ("dx12", only when built with FSR4_DX12_BRIDGE=1), for a GPU whose Vulkan driver has no FSR 4: a DX12 upscaler
+// DLL the player supplies (amd_fidelityfx_upscaler_dx12.dll beside the exe, or MHGU_FSR4_DX12=<path>) runs on a D3D12
+// device on the same GPU. The inputs are copied into images both APIs share, the frame so far is submitted signalling a
+// fence both share, D3D12 waits for it, upscales and signals back; the next Vulkan submission waits for that and copies
+// the picture back.
+// None of them: FSR 3.1 (fsr.c).
 //
 //   MHGU_FSR_DEBUG=1   FFX debug checking of the inputs (messages in the log)
-//   MHGU_FSR4_ROUTE=driver|loader   try only that route (default: driver if compiled in, then loader)
+//   MHGU_FSR4_ROUTE=driver|loader|dx12   try only that route (default: driver if compiled in, then loader, then dx12)
 //   MHGU_FSR4_LOADER=<path>         the loader DLL for route 2
+//   MHGU_FSR4_DX12=<path>           the DX12 upscaler DLL for route 3
 #include <stdlib.h>
 #include <string.h>
 
@@ -27,6 +33,10 @@
 // amdvkffx64.dll in memory); 0 = none of that code exists and only the player-supplied loader route is left.
 #ifndef FSR4_DRIVER_PATCH
 #define FSR4_DRIVER_PATCH 0
+#endif
+// FSR4_DX12_BRIDGE (Makefile, default 0): 1 = route 3 below is compiled in.
+#ifndef FSR4_DX12_BRIDGE
+#define FSR4_DX12_BRIDGE 0
 #endif
 
 // g_fsr4_fallback (the settings panel shows it on the Upscaler row; settings_locale.h translates it)
@@ -48,6 +58,13 @@ bool vk_fsr4_dispatch(const Fsr4Dispatch *d) { (void)d; return false; }
 
 #include <ffx_api.h>
 #include <ffx_upscale.h>
+#if FSR4_DX12_BRIDGE
+#define COBJMACROS
+#include <initguid.h>  // (the D3D12 / DXGI interface ids, defined here)
+#include <d3d12.h>
+#include <dxgi1_4.h>
+#include <vulkan/vulkan_win32.h>
+#endif
 
 // ---- what the driver's provider table looks like (ffx-api's ffxProviderInterface / ExternalProviderData, with the
 // version-3 tail: isSupported takes { VkDevice, VkPhysicalDevice, vkGetDeviceProcAddr })
@@ -101,24 +118,39 @@ static uint64_t loader_ver;   // route 2: the FSR 4 version id the loader offere
 static ffxContext ctx;
 static uint32_t ctx_rw, ctx_rh, ctx_ow, ctx_oh;
 static bool loaded, failed, extensions_ok, linear_in;  // linear_in: MHGU_FSR4_LINEAR=1 (A/B: the colour is not flagged as gamma-encoded)
+static bool bridge_ok;  // route 3: the device has what sharing images and a fence with D3D12 takes (instead of FSR 4's own needs)
 static uint64_t frames;
 
 // ================================================================== the device
+static bool has_ext(const VkExtensionProperties *ep, uint32_t n, const char *name) {
+    for (uint32_t j = 0; j < n; j++)
+        if (!strcmp(ep[j].extensionName, name)) return true;
+    return false;
+}
+
 bool vk_fsr4_device_exts(const VkExtensionProperties *ep, uint32_t n, const char **ext, uint32_t *n_ext) {
     static const char *const want[] = {VK_KHR_COOPERATIVE_MATRIX_EXTENSION_NAME, VK_EXT_SHADER_FLOAT8_EXTENSION_NAME,
                                        VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME};
-    for (int i = 0; i < 4; i++) {
-        bool have = false;
-        for (uint32_t j = 0; j < n; j++) have |= !strcmp(ep[j].extensionName, want[i]);
-        if (!have) {
-            LOG("[fsr4] the GPU lacks %s: FSR 4 cannot run here, FSR 3.1 will\n", want[i]);
-            g_fsr4_fallback = NO_FSR4_GPU;
-            return false;
-        }
+    const char *route = getenv("MHGU_FSR4_ROUTE"), *lack = route && !strcmp(route, "dx12") ? "(MHGU_FSR4_ROUTE=dx12)" : NULL;
+    for (int i = 0; i < 4 && !lack; i++)
+        if (!has_ext(ep, n, want[i])) lack = want[i];
+    if (!lack) {
+        for (int i = 0; i < 4; i++) ext[(*n_ext)++] = want[i];
+        extensions_ok = true;
+        return true;
     }
-    for (int i = 0; i < 4; i++) ext[(*n_ext)++] = want[i];
-    extensions_ok = true;
-    return true;
+#if FSR4_DX12_BRIDGE
+    if (has_ext(ep, n, VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME) && has_ext(ep, n, VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME)) {
+        LOG("[fsr4] the GPU lacks %s for FSR 4 on Vulkan: FSR 4 through D3D12 is tried\n", lack);
+        ext[(*n_ext)++] = VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
+        ext[(*n_ext)++] = VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME;
+        bridge_ok = true;
+        return true;
+    }
+#endif
+    LOG("[fsr4] the GPU lacks %s: FSR 4 cannot run here, FSR 3.1 will\n", lack);
+    g_fsr4_fallback = NO_FSR4_GPU;
+    return false;
 }
 
 static VkPhysicalDeviceCooperativeMatrixFeaturesKHR en_cm = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_FEATURES_KHR};
@@ -127,7 +159,7 @@ static VkPhysicalDeviceSynchronization2FeaturesKHR en_s2 = {.sType = VK_STRUCTUR
 static VkPhysicalDeviceSubgroupSizeControlFeaturesEXT en_sg = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
 
 bool vk_fsr4_device_features(VkPhysicalDeviceVulkan11Features *f11, VkPhysicalDeviceVulkan12Features *f12, VkPhysicalDeviceFeatures *f) {
-    if (!extensions_ok) return false;
+    if (!extensions_ok) return bridge_ok;  // (route 3 needs no features beyond the timeline semaphores the renderer has)
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR cm = {.sType = en_cm.sType};
     VkPhysicalDeviceShaderFloat8FeaturesEXT f8 = {.sType = en_f8.sType, .pNext = &cm};
     VkPhysicalDeviceSynchronization2FeaturesKHR s2 = {.sType = en_s2.sType, .pNext = &f8};
@@ -406,22 +438,162 @@ static bool init_loader(void) {
     return true;
 }
 
+#if FSR4_DX12_BRIDGE
+// ================================================================== route 3: FSR 4 on a D3D12 device beside ours
+#define BACKEND_DX12_TYPE 0x0000002u  // FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12 (the SDK's ffx_api_dx12.h)
+typedef struct {
+    ffxCreateContextDescHeader header;
+    ID3D12Device *device;
+} BackendDx12;
+// an image both APIs see: a shared D3D12 resource, imported as a VkImage
+typedef struct {
+    ID3D12Resource *res;
+    VkImage image;
+    VkDeviceMemory mem;
+    VkFormat format;
+    uint32_t width, height;
+    bool fresh;  // not yet used on the Vulkan side (UNDEFINED, not owned by D3D12)
+} Shared;
+enum { SH_COLOR, SH_DEPTH, SH_MOTION, SH_REACTIVE, SH_OUTPUT, SH_N };
+#define DX_LISTS 3  // command allocators in turn (each reused once its last list is done)
+static bool via_dx12;
+static ID3D12Device *dx;
+static ID3D12CommandQueue *dx_queue;
+static ID3D12CommandAllocator *dx_alloc[DX_LISTS];
+static uint64_t dx_alloc_done[DX_LISTS];  // the fence value at which each allocator's last list is done
+static ID3D12GraphicsCommandList *dx_list;
+static ID3D12Fence *dx_fence;
+static HANDLE dx_event;
+static VkSemaphore bridge;  // dx_fence, as a Vulkan timeline semaphore
+static uint64_t bridge_val;
+static uint32_t dx_turn;
+static Shared sh[SH_N];
+static PFN_vkGetMemoryWin32HandlePropertiesKHR get_handle_props;
+// MHGU_FSR_LOG: D3D12's GPU time around each upscale (timestamps 2k, 2k+1 for list k) and the CPU time waited for lists
+static ID3D12QueryHeap *dx_times;
+static ID3D12Resource *dx_times_rb;
+static uint64_t dx_tick_hz;
+static double stat_gpu_ms, stat_wait_ms;
+static uint32_t stat_n;
+
+static bool init_dx12(void) {
+    if (!bridge_ok) return false;
+    wchar_t path[MAX_PATH] = {0};
+    const char *env = getenv("MHGU_FSR4_DX12");
+    if (env) MultiByteToWideChar(CP_UTF8, 0, env, -1, path, MAX_PATH);
+    else {
+        GetModuleFileNameW(NULL, path, MAX_PATH);
+        wchar_t *slash = wcsrchr(path, L'\\');
+        if (slash) wcscpy(slash + 1, L"amd_fidelityfx_upscaler_dx12.dll"); else path[0] = 0;
+    }
+    if (!path[0] || GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
+        LOG("[fsr4] no DX12 upscaler supplied (amd_fidelityfx_upscaler_dx12.dll beside the exe, or MHGU_FSR4_DX12=<path>)\n");
+        return false;
+    }
+    // the D3D12 device on the Vulkan device's GPU
+    VkPhysicalDeviceIDProperties idp = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceProperties2 p2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &idp};
+    vkGetPhysicalDeviceProperties2(g_vk.phys, &p2);
+    HMODULE d3d12 = LoadLibraryW(L"d3d12.dll"), dxgi = LoadLibraryW(L"dxgi.dll");
+    PFN_D3D12_CREATE_DEVICE create_device = d3d12 ? (PFN_D3D12_CREATE_DEVICE)(void *)GetProcAddress(d3d12, "D3D12CreateDevice") : NULL;
+    HRESULT (WINAPI *create_factory)(REFIID, void **) = dxgi ? (void *)GetProcAddress(dxgi, "CreateDXGIFactory1") : NULL;
+    IDXGIFactory4 *factory = NULL;
+    IDXGIAdapter1 *adapter = NULL;
+    LUID luid;
+    memcpy(&luid, idp.deviceLUID, sizeof luid);
+    HRESULT hr = !idp.deviceLUIDValid || !create_device || !create_factory ? E_FAIL : create_factory(&IID_IDXGIFactory4, (void **)&factory);
+    if (SUCCEEDED(hr)) hr = IDXGIFactory4_EnumAdapterByLuid(factory, luid, &IID_IDXGIAdapter1, (void **)&adapter);
+    if (SUCCEEDED(hr)) hr = create_device((IUnknown *)adapter, D3D_FEATURE_LEVEL_12_0, &IID_ID3D12Device, (void **)&dx);
+    if (adapter) IDXGIAdapter1_Release(adapter);
+    if (factory) IDXGIFactory4_Release(factory);
+    if (FAILED(hr)) { LOG("[fsr4] no D3D12 device on this GPU (0x%08lx)\n", (unsigned long)hr); return false; }
+    D3D12_COMMAND_QUEUE_DESC qd = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT};
+    hr = ID3D12Device_CreateCommandQueue(dx, &qd, &IID_ID3D12CommandQueue, (void **)&dx_queue);
+    for (int i = 0; i < DX_LISTS && SUCCEEDED(hr); i++)
+        hr = ID3D12Device_CreateCommandAllocator(dx, D3D12_COMMAND_LIST_TYPE_DIRECT, &IID_ID3D12CommandAllocator, (void **)&dx_alloc[i]);
+    if (SUCCEEDED(hr))
+        hr = ID3D12Device_CreateCommandList(dx, 0, D3D12_COMMAND_LIST_TYPE_DIRECT, dx_alloc[0], NULL, &IID_ID3D12GraphicsCommandList,
+                                            (void **)&dx_list);
+    if (SUCCEEDED(hr)) hr = ID3D12GraphicsCommandList_Close(dx_list);
+    if (SUCCEEDED(hr)) hr = ID3D12Device_CreateFence(dx, 0, D3D12_FENCE_FLAG_SHARED, &IID_ID3D12Fence, (void **)&dx_fence);
+    HANDLE fh = NULL;
+    if (SUCCEEDED(hr)) hr = ID3D12Device_CreateSharedHandle(dx, (ID3D12DeviceChild *)dx_fence, NULL, GENERIC_ALL, NULL, &fh);
+    if (FAILED(hr)) { LOG("[fsr4] the D3D12 queue / fence could not be made (0x%08lx)\n", (unsigned long)hr); return false; }
+    dx_event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (getenv("MHGU_FSR_LOG")) {
+        D3D12_QUERY_HEAP_DESC qh = {.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP, .Count = 2 * DX_LISTS};
+        D3D12_HEAP_PROPERTIES rb = {.Type = D3D12_HEAP_TYPE_READBACK};
+        D3D12_RESOURCE_DESC bd = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = 16 * DX_LISTS, .Height = 1, .DepthOrArraySize = 1,
+                                  .MipLevels = 1, .SampleDesc = {1, 0}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+        if (FAILED(ID3D12Device_CreateQueryHeap(dx, &qh, &IID_ID3D12QueryHeap, (void **)&dx_times)) ||
+            FAILED(ID3D12Device_CreateCommittedResource(dx, &rb, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST, NULL,
+                                                        &IID_ID3D12Resource, (void **)&dx_times_rb)) ||
+            FAILED(ID3D12CommandQueue_GetTimestampFrequency(dx_queue, &dx_tick_hz)))
+            dx_times = NULL;
+    }
+    // the fence, as a timeline semaphore of ours
+    VkSemaphoreTypeCreateInfo st = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO, .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE};
+    VkSemaphoreCreateInfo sci = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, .pNext = &st};
+    PFN_vkImportSemaphoreWin32HandleKHR import_sem = (void *)vkGetDeviceProcAddr(g_vk.dev, "vkImportSemaphoreWin32HandleKHR");
+    get_handle_props = (void *)vkGetDeviceProcAddr(g_vk.dev, "vkGetMemoryWin32HandlePropertiesKHR");
+    VkResult vr = import_sem ? vkCreateSemaphore(g_vk.dev, &sci, NULL, &bridge) : VK_ERROR_EXTENSION_NOT_PRESENT;
+    VkImportSemaphoreWin32HandleInfoKHR ii = {.sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_WIN32_HANDLE_INFO_KHR, .semaphore = bridge,
+                                              .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT, .handle = fh};
+    if (vr == VK_SUCCESS) vr = import_sem(g_vk.dev, &ii);
+    CloseHandle(fh);
+    if (vr != VK_SUCCESS) { LOG("[fsr4] the D3D12 fence could not be shared with Vulkan (%d)\n", vr); return false; }
+    // the upscaler, asked for its FSR 4 on this device
+    HMODULE up = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!up) { LOG("[fsr4] %ls could not be loaded (error %lu)\n", path, GetLastError()); return false; }
+    char ver[32];
+    file_version(path, ver, sizeof ver);
+    LOG("[fsr4] DX12 upscaler %ls, file version %s\n", path, ver);
+    PfnFfxQuery query = (PfnFfxQuery)GetProcAddress(up, "ffxQuery");
+    f_create = (void *)GetProcAddress(up, "ffxCreateContext");
+    f_destroy = (void *)GetProcAddress(up, "ffxDestroyContext");
+    f_dispatch = (void *)GetProcAddress(up, "ffxDispatch");
+    if (!query || !f_create || !f_destroy || !f_dispatch) { LOG("[fsr4] the DX12 upscaler lacks the ffx-api exports\n"); return false; }
+    uint64_t n = 16, ids[16] = {0};
+    const char *names[16] = {0};
+    struct ffxQueryDescGetVersions gv = {.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS, .createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
+                                         .device = dx, .outputCount = &n, .versionIds = ids, .versionNames = names};
+    ffxReturnCode_t rc = query(NULL, &gv.header);
+    if (rc != FFX_API_RETURN_OK) { LOG("[fsr4] the DX12 upscaler's version query failed (ffx return code %d)\n", (int)rc); return false; }
+    int best = -1;
+    for (uint64_t i = 0; i < n; i++) {
+        LOG("[fsr4] the DX12 upscaler offers %s (id %#llx)\n", names[i] ? names[i] : "?", (unsigned long long)ids[i]);
+        if (names[i] && names[i][0] == '4' && names[i][1] == '.' && (best < 0 || strcmp(names[i], names[best]) > 0)) best = (int)i;
+    }
+    if (best < 0) { LOG("[fsr4] the DX12 upscaler offers no FSR 4 on this GPU\n"); return false; }
+    loader_ver = ids[best];
+    snprintf(prov_name, sizeof prov_name, "FSR %s (D3D12)", names[best]);
+    via_dx12 = true;
+    return true;
+}
+#endif  // FSR4_DX12_BRIDGE
+
 bool vk_fsr4_init(void) {
-    if (!extensions_ok) return false;
+    if (!extensions_ok && !bridge_ok) return false;
     const char *route = getenv("MHGU_FSR4_ROUTE");
     bool ok = false;
 #if FSR4_DRIVER_PATCH
-    if (!route || !strcmp(route, "driver")) {
+    if (extensions_ok && (!route || !strcmp(route, "driver"))) {
         ok = init_driver();
         if (ok) LOG("[fsr4] route: the driver's provider (amdvkffx64.dll, import patch)\n");
     }
 #else
     if (route && !strcmp(route, "driver")) LOG("[fsr4] built with FSR4_DRIVER_PATCH=0: the driver route does not exist\n");
 #endif
-    if (!ok && (!route || !strcmp(route, "loader"))) {
+    if (!ok && extensions_ok && (!route || !strcmp(route, "loader"))) {
         ok = init_loader();
         if (ok) LOG("[fsr4] route: the player-supplied loader (ffx-api, no patching)\n");
     }
+#if FSR4_DX12_BRIDGE
+    if (!ok && (!route || !strcmp(route, "dx12"))) {
+        ok = init_dx12();
+        if (ok) LOG("[fsr4] route: the player-supplied DX12 upscaler on a D3D12 device (shared images and fence)\n");
+    }
+#endif
     if (!ok) {
         LOG("[fsr4] no FSR 4 route available: FSR 3.1 is used\n");
         g_fsr4_fallback = NO_FSR4_START;
@@ -448,6 +620,7 @@ static uint32_t ffx_format(VkFormat f) {
     case VK_FORMAT_B8G8R8A8_SRGB: return FFX_API_SURFACE_FORMAT_B8G8R8A8_SRGB;
     case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return FFX_API_SURFACE_FORMAT_R10G10B10A2_UNORM;
     case VK_FORMAT_R16G16B16A16_SFLOAT: return FFX_API_SURFACE_FORMAT_R16G16B16A16_FLOAT;
+    case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return FFX_API_SURFACE_FORMAT_R11G11B10_FLOAT;
     case VK_FORMAT_R32_SFLOAT: return FFX_API_SURFACE_FORMAT_R32_FLOAT;
     case VK_FORMAT_R32G32_SFLOAT: return FFX_API_SURFACE_FORMAT_R32G32_FLOAT;
     case VK_FORMAT_R16G16_SFLOAT: return FFX_API_SURFACE_FORMAT_R16G16_FLOAT;
@@ -476,6 +649,186 @@ static bool fail(const char *why, int rc) {
     return false;
 }
 
+#if FSR4_DX12_BRIDGE
+// ---- route 3: the images shared with D3D12, and the frame split around its upscale
+static uint32_t dx_cur;  // the allocator of the list being recorded
+
+static DXGI_FORMAT dxgi_format(VkFormat f) {
+    switch (f) {
+    case VK_FORMAT_R8G8B8A8_UNORM: return DXGI_FORMAT_R8G8B8A8_UNORM;
+    case VK_FORMAT_R8G8B8A8_SRGB: return DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    case VK_FORMAT_B8G8R8A8_UNORM: return DXGI_FORMAT_B8G8R8A8_UNORM;
+    case VK_FORMAT_B8G8R8A8_SRGB: return DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    case VK_FORMAT_A2B10G10R10_UNORM_PACK32: return DXGI_FORMAT_R10G10B10A2_UNORM;
+    case VK_FORMAT_R16G16B16A16_SFLOAT: return DXGI_FORMAT_R16G16B16A16_FLOAT;
+    case VK_FORMAT_B10G11R11_UFLOAT_PACK32: return DXGI_FORMAT_R11G11B10_FLOAT;
+    case VK_FORMAT_R32_SFLOAT: return DXGI_FORMAT_R32_FLOAT;
+    case VK_FORMAT_R32G32_SFLOAT: return DXGI_FORMAT_R32G32_FLOAT;
+    case VK_FORMAT_R16G16_SFLOAT: return DXGI_FORMAT_R16G16_FLOAT;
+    case VK_FORMAT_R8_UNORM: return DXGI_FORMAT_R8_UNORM;
+    default: return DXGI_FORMAT_UNKNOWN;
+    }
+}
+
+static void shared_free(Shared *s) {
+    if (s->image) vkDestroyImage(g_vk.dev, s->image, NULL);
+    if (s->mem) vkFreeMemory(g_vk.dev, s->mem, NULL);
+    if (s->res) ID3D12Resource_Release(s->res);
+    *s = (Shared){0};
+}
+
+// a D3D12 resource of this format and size (written by FSR when uav), and the same memory as a VkImage of ours
+static bool shared_make(Shared *s, VkFormat f, uint32_t w, uint32_t h, bool uav) {
+    shared_free(s);
+    DXGI_FORMAT df = dxgi_format(f);
+    if (df == DXGI_FORMAT_UNKNOWN) { LOG("[fsr4] VkFormat %d has no D3D12 match\n", f); return false; }
+    D3D12_HEAP_PROPERTIES hp = {.Type = D3D12_HEAP_TYPE_DEFAULT};
+    D3D12_RESOURCE_DESC rd = {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = w, .Height = h, .DepthOrArraySize = 1,
+                              .MipLevels = 1, .Format = df, .SampleDesc = {1, 0},
+                              .Flags = uav ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE};
+    HANDLE hd = NULL;
+    HRESULT hr = ID3D12Device_CreateCommittedResource(dx, &hp, D3D12_HEAP_FLAG_SHARED, &rd, D3D12_RESOURCE_STATE_COMMON, NULL,
+                                                      &IID_ID3D12Resource, (void **)&s->res);
+    if (SUCCEEDED(hr)) hr = ID3D12Device_CreateSharedHandle(dx, (ID3D12DeviceChild *)s->res, NULL, GENERIC_ALL, NULL, &hd);
+    if (FAILED(hr)) { LOG("[fsr4] the shared D3D12 image (format %d, %ux%u) could not be made (0x%08lx)\n", df, w, h, (unsigned long)hr); return false; }
+    VkExternalMemoryImageCreateInfo ex = {.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+                                          .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT};
+    VkImageCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .pNext = &ex, .imageType = VK_IMAGE_TYPE_2D, .format = f,
+                            .extent = {w, h, 1}, .mipLevels = 1, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+                            .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+    VkResult vr = vkCreateImage(g_vk.dev, &ci, NULL, &s->image);
+    VkMemoryRequirements mr = {0};
+    if (vr == VK_SUCCESS) vkGetImageMemoryRequirements(g_vk.dev, s->image, &mr);
+    uint32_t bits = mr.memoryTypeBits;
+    VkMemoryWin32HandlePropertiesKHR hpr = {.sType = VK_STRUCTURE_TYPE_MEMORY_WIN32_HANDLE_PROPERTIES_KHR};
+    if (vr == VK_SUCCESS && get_handle_props &&
+        get_handle_props(g_vk.dev, VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT, hd, &hpr) == VK_SUCCESS && (bits & hpr.memoryTypeBits))
+        bits &= hpr.memoryTypeBits;
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(g_vk.phys, &mp);
+    uint32_t type = UINT32_MAX;
+    for (uint32_t i = 0; i < mp.memoryTypeCount && type == UINT32_MAX; i++)
+        if ((bits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) type = i;
+    VkMemoryDedicatedAllocateInfo dai = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, .image = s->image};
+    VkImportMemoryWin32HandleInfoKHR imp = {.sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_WIN32_HANDLE_INFO_KHR, .pNext = &dai,
+                                            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D12_RESOURCE_BIT, .handle = hd};
+    VkMemoryAllocateInfo ai = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &imp, .allocationSize = mr.size, .memoryTypeIndex = type};
+    if (vr == VK_SUCCESS) vr = type == UINT32_MAX ? VK_ERROR_FORMAT_NOT_SUPPORTED : vkAllocateMemory(g_vk.dev, &ai, NULL, &s->mem);
+    if (vr == VK_SUCCESS) vr = vkBindImageMemory(g_vk.dev, s->image, s->mem, 0);
+    CloseHandle(hd);
+    if (vr != VK_SUCCESS) { LOG("[fsr4] the shared D3D12 image could not be used by Vulkan (%d)\n", vr); shared_free(s); return false; }
+    s->format = f, s->width = w, s->height = h, s->fresh = true;
+    return true;
+}
+
+// ownership of the shared images (only the output when output_only): from D3D12 to our transfers, or back to D3D12
+static void shared_barrier(VkCommandBuffer cb, bool to_us, bool output_only) {
+    VkImageMemoryBarrier b[SH_N];
+    uint32_t n = 0;
+    for (int i = output_only ? SH_OUTPUT : 0; i < SH_N; i++) {
+        Shared *s = &sh[i];
+        if (!s->image) continue;
+        bool fresh = to_us && s->fresh;
+        b[n++] = (VkImageMemoryBarrier){
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .image = s->image, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+            .srcAccessMask = to_us ? 0 : VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = to_us ? VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT : 0,
+            .oldLayout = fresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL, .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = fresh ? VK_QUEUE_FAMILY_IGNORED : to_us ? VK_QUEUE_FAMILY_EXTERNAL : g_vk.qfam,
+            .dstQueueFamilyIndex = fresh ? VK_QUEUE_FAMILY_IGNORED : to_us ? g_vk.qfam : VK_QUEUE_FAMILY_EXTERNAL};
+        if (to_us) s->fresh = false;
+    }
+    vkCmdPipelineBarrier(cb, to_us ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         to_us ? VK_PIPELINE_STAGE_TRANSFER_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, n, b);
+}
+
+static void copy(VkCommandBuffer cb, VkImage from, VkImage to, uint32_t w, uint32_t h) {
+    VkImageCopy r = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                     .extent = {w, h, 1}};
+    vkCmdCopyImage(cb, from, VK_IMAGE_LAYOUT_GENERAL, to, VK_IMAGE_LAYOUT_GENERAL, 1, &r);
+}
+
+// the shared images for these inputs (made again when a size or format changes), and the D3D12 list opened
+static bool dx12_begin(const Fsr4Dispatch *d) {
+    const Fsr4Image *in[SH_N] = {&d->color, &d->depth, &d->motion, &d->reactive, &d->output};
+    for (int i = 0; i < SH_N; i++) {
+        const Fsr4Image *s = in[i];
+        if (!s->image || (sh[i].res && sh[i].format == s->format && sh[i].width == s->width && sh[i].height == s->height)) continue;
+        if (sh[i].res) {  // (both GPUs done with the old one)
+            vkDeviceWaitIdle(g_vk.dev);
+            ID3D12Fence_SetEventOnCompletion(dx_fence, bridge_val, dx_event);
+            WaitForSingleObject(dx_event, 10000);
+        }
+        if (!shared_make(&sh[i], s->format, s->width, s->height, i == SH_OUTPUT))
+            return fail("the images shared with D3D12 could not be made", 0);
+    }
+    dx_cur = dx_turn++ % DX_LISTS;
+    uint64_t t0 = plat_now_ns();
+    if (ID3D12Fence_GetCompletedValue(dx_fence) < dx_alloc_done[dx_cur]) {
+        ID3D12Fence_SetEventOnCompletion(dx_fence, dx_alloc_done[dx_cur], dx_event);
+        WaitForSingleObject(dx_event, 10000);
+    }
+    stat_wait_ms += (plat_now_ns() - t0) / 1e6;
+    if (dx_times && dx_alloc_done[dx_cur]) {  // (this list's last upscale is done: its timestamps are in)
+        uint64_t *ts;
+        D3D12_RANGE r = {16 * dx_cur, 16 * dx_cur + 16};
+        if (SUCCEEDED(ID3D12Resource_Map(dx_times_rb, 0, &r, (void **)&ts))) {
+            stat_gpu_ms += (double)(ts[2 * dx_cur + 1] - ts[2 * dx_cur]) * 1000.0 / dx_tick_hz;
+            stat_n++;
+            D3D12_RANGE none = {0};
+            ID3D12Resource_Unmap(dx_times_rb, 0, &none);
+        }
+        if (stat_n == 120) {
+            LOG("[fsr4] D3D12 route, average of 120 upscales: %.3f ms GPU (D3D12 timestamps), %.3f ms CPU waiting for a list\n",
+                stat_gpu_ms / stat_n, stat_wait_ms / stat_n);
+            stat_gpu_ms = stat_wait_ms = 0, stat_n = 0;
+        }
+    }
+    HRESULT hr = ID3D12CommandAllocator_Reset(dx_alloc[dx_cur]);
+    if (SUCCEEDED(hr)) hr = ID3D12GraphicsCommandList_Reset(dx_list, dx_alloc[dx_cur], NULL);
+    if (FAILED(hr)) return fail("the D3D12 command list could not be reset", (int)hr);
+    if (dx_times) ID3D12GraphicsCommandList_EndQuery(dx_list, dx_times, D3D12_QUERY_TYPE_TIMESTAMP, 2 * dx_cur);
+    return true;
+}
+
+static struct FfxApiResource dx_resource(const Shared *s, bool uav) {
+    struct FfxApiResource r = {0};
+    if (!s->res) return r;
+    r.resource = s->res;
+    r.description.type = FFX_API_RESOURCE_TYPE_TEXTURE2D;
+    r.description.format = ffx_format(s->format);
+    r.description.width = s->width, r.description.height = s->height, r.description.depth = 1, r.description.mipCount = 1;
+    r.description.usage = uav ? FFX_API_RESOURCE_USAGE_UAV : FFX_API_RESOURCE_USAGE_READ_ONLY;
+    r.state = FFX_API_RESOURCE_STATE_COMMON;  // (the state shared resources are handed over in)
+    return r;
+}
+
+// the D3D12 list is recorded: the inputs into the shared images, the frame so far submitted, D3D12 upscales once that
+// is done; the next submission waits for it and starts with the picture copied into the game's image
+static void dx12_run(const Fsr4Dispatch *d) {
+    VkCommandBuffer cb = d->cb;
+    shared_barrier(cb, true, false);
+    copy(cb, d->color.image, sh[SH_COLOR].image, d->color.width, d->color.height);
+    copy(cb, d->depth.image, sh[SH_DEPTH].image, d->depth.width, d->depth.height);
+    copy(cb, d->motion.image, sh[SH_MOTION].image, d->motion.width, d->motion.height);
+    if (d->reactive.image) copy(cb, d->reactive.image, sh[SH_REACTIVE].image, d->reactive.width, d->reactive.height);
+    shared_barrier(cb, false, false);
+    uint64_t go = ++bridge_val, back = ++bridge_val;
+    vk_submit_handoff(bridge, go, back);
+    ID3D12CommandQueue_Wait(dx_queue, dx_fence, go);
+    ID3D12CommandList *list = (ID3D12CommandList *)dx_list;
+    ID3D12CommandQueue_ExecuteCommandLists(dx_queue, 1, &list);
+    ID3D12CommandQueue_Signal(dx_queue, dx_fence, back);
+    dx_alloc_done[dx_cur] = back;
+    cb = vk_cmd();
+    shared_barrier(cb, true, true);
+    copy(cb, sh[SH_OUTPUT].image, d->output.image, d->output.width, d->output.height);
+    shared_barrier(cb, false, true);
+    vk_full_barrier(cb);
+}
+#endif
+
 static bool make_context(const Fsr4Dispatch *d) {
     if (ctx && ctx_rw == d->render[0] && ctx_rh == d->render[1] && ctx_ow == d->out[0] && ctx_oh == d->out[1]) return true;
     if (ctx) { f_destroy(&ctx, NULL); ctx = NULL; }
@@ -490,6 +843,10 @@ static bool make_context(const Fsr4Dispatch *d) {
     struct ffxOverrideVersion ov = {.header.type = FFX_API_DESC_TYPE_OVERRIDE_VERSION, .versionId = loader_ver};
     bd.header.pNext = via_loader ? &ov.header : &uv.header;
     cu.header.pNext = &bd.header;
+#if FSR4_DX12_BRIDGE
+    BackendDx12 bx = {.header.type = BACKEND_DX12_TYPE, .header.pNext = &ov.header, .device = dx};
+    if (via_dx12) cu.header.pNext = &bx.header;
+#endif
     uint64_t t0 = plat_now_ns();
     ffxReturnCode_t rc = f_create(&ctx, &cu.header, NULL);
     if (rc != FFX_API_RETURN_OK || !ctx) { ctx = NULL; return fail("the FSR 4 context could not be created", (int)rc); }
@@ -508,6 +865,17 @@ bool vk_fsr4_dispatch(const Fsr4Dispatch *d) {
     du.motionVectors = resource(&d->motion, false);
     du.reactive = resource(&d->reactive, false);
     du.output = resource(&d->output, true);
+#if FSR4_DX12_BRIDGE
+    if (via_dx12) {  // (recorded into the D3D12 list first: if that fails, nothing has been submitted yet)
+        if (!dx12_begin(d)) return false;
+        du.commandList = dx_list;
+        du.color = dx_resource(&sh[SH_COLOR], false);
+        du.depth = dx_resource(&sh[SH_DEPTH], false);
+        du.motionVectors = dx_resource(&sh[SH_MOTION], false);
+        du.reactive = d->reactive.image ? dx_resource(&sh[SH_REACTIVE], false) : (struct FfxApiResource){0};
+        du.output = dx_resource(&sh[SH_OUTPUT], true);
+    }
+#endif
     du.jitterOffset = (struct FfxApiFloatCoords2D){d->jitter[0], d->jitter[1]};
     du.motionVectorScale = (struct FfxApiFloatCoords2D){1.0f, 1.0f};
     du.renderSize = (struct FfxApiDimensions2D){d->render[0], d->render[1]};
@@ -525,7 +893,17 @@ bool vk_fsr4_dispatch(const Fsr4Dispatch *d) {
     static int fail_at = -2;  // (test: MHGU_FSR4_FAILTEST=n reports the n-th dispatch as failed, to see the fallback)
     if (fail_at == -2) fail_at = getenv("MHGU_FSR4_FAILTEST") ? atoi(getenv("MHGU_FSR4_FAILTEST")) : -1;
     ffxReturnCode_t rc = fail_at >= 0 && frames == (uint64_t)fail_at ? FFX_API_RETURN_ERROR : f_dispatch(&ctx, &du.header);
+#if FSR4_DX12_BRIDGE
+    if (via_dx12 && dx_times) {
+        ID3D12GraphicsCommandList_EndQuery(dx_list, dx_times, D3D12_QUERY_TYPE_TIMESTAMP, 2 * dx_cur + 1);
+        ID3D12GraphicsCommandList_ResolveQueryData(dx_list, dx_times, D3D12_QUERY_TYPE_TIMESTAMP, 2 * dx_cur, 2, dx_times_rb, 16 * dx_cur);
+    }
+    if (via_dx12 && FAILED(ID3D12GraphicsCommandList_Close(dx_list)) && rc == FFX_API_RETURN_OK) rc = FFX_API_RETURN_ERROR;
+#endif
     if (rc != FFX_API_RETURN_OK) return fail("the FSR 4 dispatch failed", (int)rc);
+#if FSR4_DX12_BRIDGE
+    if (via_dx12) dx12_run(d);
+#endif
     if (++frames == 1) LOG("[fsr4] first %s dispatch recorded\n", prov_name);
     return true;
 }

@@ -1631,7 +1631,9 @@ static bool run_fsr(NvnTexture *h, NvnTexture *hs, NvnTexture *depth, NvnTexture
                            .view_to_meters = 0.01f, .sharpness = sharpness, .sharpen = sharpness > 0.0f,
                            .reset = reset};
         if (react) d4.reactive = (Fsr4Image){img_react.image, img_react.format, img_react.width, img_react.height};
-        if (vk_fsr4_dispatch(&d4)) {
+        bool done = vk_fsr4_dispatch(&d4);
+        cb = vk_cmd();  // (the D3D12 route submits what came before it and goes on in a new command buffer)
+        if (done) {
             n_fsr4++;
             goto dispatched;
         }

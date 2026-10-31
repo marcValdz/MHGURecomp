@@ -197,11 +197,15 @@ void vk_full_barrier(VkCommandBuffer cb) {
 
 static void guest_copy_new_submission(void);
 
+// vk_submit_handoff: an external timeline semaphore the next submission signals / the one after it waits for
+static VkSemaphore ext_sig, ext_wait;
+static uint64_t ext_sig_val, ext_wait_val;
+
 // Submit the pending work (if any). wait / signal: binary semaphores for presentation (may be null).
 void vk_submit_extra(VkSemaphore wait, VkSemaphore signal) {
     vk_end_pass();
     Sub *s = sub();
-    if (!s->main_begun && !s->upload_begun && !wait && !signal) return;
+    if (!s->main_begun && !s->upload_begun && !wait && !signal && !ext_sig) return;
     VkCommandBuffer cbs[2];
     uint32_t n = 0;
     if (s->upload_begun) {
@@ -212,16 +216,21 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal) {
     vk_cmd();  // (an empty main buffer still carries the semaphores)
     VK_CHECK(vkEndCommandBuffer(s->main));
     cbs[n++] = s->main;
-    VkSemaphore sig[2] = {g_vk.timeline, signal};
-    uint64_t sig_val[2] = {submit_seq + 1, 0};
-    uint64_t wait_val = 0;
-    VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkSemaphore sig[3] = {g_vk.timeline}, waits[2];
+    uint64_t sig_val[3] = {submit_seq + 1}, wait_val[2] = {0, 0};
+    VkPipelineStageFlags wait_stage[2];
+    uint32_t ns = 1, nw = 0;
+    if (signal) sig[ns] = signal, sig_val[ns++] = 0;
+    if (ext_sig) sig[ns] = ext_sig, sig_val[ns++] = ext_sig_val;
+    if (wait) waits[nw] = wait, wait_stage[nw++] = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+    if (ext_wait) waits[nw] = ext_wait, wait_val[nw] = ext_wait_val, wait_stage[nw++] = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    ext_sig = ext_wait = VK_NULL_HANDLE;
     VkTimelineSemaphoreSubmitInfo ts = {.sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-                                        .waitSemaphoreValueCount = wait ? 1 : 0, .pWaitSemaphoreValues = &wait_val,
-                                        .signalSemaphoreValueCount = signal ? 2 : 1, .pSignalSemaphoreValues = sig_val};
-    VkSubmitInfo si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .pNext = &ts, .waitSemaphoreCount = wait ? 1 : 0,
-                       .pWaitSemaphores = &wait, .pWaitDstStageMask = &wait_stage, .commandBufferCount = n,
-                       .pCommandBuffers = cbs, .signalSemaphoreCount = signal ? 2 : 1, .pSignalSemaphores = sig};
+                                        .waitSemaphoreValueCount = nw, .pWaitSemaphoreValues = wait_val,
+                                        .signalSemaphoreValueCount = ns, .pSignalSemaphoreValues = sig_val};
+    VkSubmitInfo si = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .pNext = &ts, .waitSemaphoreCount = nw,
+                       .pWaitSemaphores = waits, .pWaitDstStageMask = wait_stage, .commandBufferCount = n,
+                       .pCommandBuffers = cbs, .signalSemaphoreCount = ns, .pSignalSemaphores = sig};
     VkFence fence = VK_NULL_HANDLE;
     if (g_vk.fences) {
         fence = seq_fence_take(submit_seq + 1);
@@ -241,6 +250,12 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal) {
     cur_sub = (cur_sub + 1) % SUBS;
     guest_copy_new_submission();
     vk_collect_dead();
+}
+
+void vk_submit_handoff(VkSemaphore sem, uint64_t value, uint64_t then) {
+    ext_sig = sem, ext_sig_val = value;
+    vk_submit_extra(VK_NULL_HANDLE, VK_NULL_HANDLE);
+    ext_wait = sem, ext_wait_val = then;
 }
 
 static void renderer_submit(void) { vk_submit_extra(VK_NULL_HANDLE, VK_NULL_HANDLE); }
