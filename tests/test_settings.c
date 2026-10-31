@@ -219,7 +219,9 @@ int main(int argc, char **argv) {
     assert(game_confirm_swap(0x2000)==0x4000 && game_confirm_swap(0x4001)==0x2001 && game_confirm_swap(0x6000)==0x6000);
     assert(game_confirm_field_mode(true,0)==FIELD_SWAP && game_confirm_field_mode(true,5)==FIELD_SWAP);
     assert(game_confirm_field_mode(false,5)==FIELD_BOX && game_confirm_field_mode(false,33)==FIELD_BOX);
+    assert(game_confirm_field_mode(false,14)==FIELD_BOX && game_confirm_field_mode(false,16)==FIELD_BOX);
     assert(game_confirm_field_mode(false,1)==FIELD_AS_IS && game_confirm_field_mode(false,10)==FIELD_AS_IS);
+    assert(game_confirm_field_mode(false,6)==FIELD_AS_IS && game_confirm_field_mode(false,15)==FIELD_AS_IS);
     assert(game_confirm_field_mode(false,0)==FIELD_AS_IS && game_confirm_field_mode(false,40)==FIELD_AS_IS);
     assert(game_confirm_field(0x4000,FIELD_BOX)==0x2000 && game_confirm_field(0x6000,FIELD_BOX)==0x2000);
     assert(game_confirm_field(0x2001,FIELD_BOX)==0x0001 && game_confirm_field(0x4000,FIELD_AS_IS)==0x4000);

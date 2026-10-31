@@ -13,11 +13,15 @@
 // rolls); or at a box's prompt in a quest, the bottom button opens it and the right one does nothing
 enum { FIELD_AS_IS, FIELD_SWAP, FIELD_BOX };
 
-// The quest prompts (the hunter's +0x32b4, 1..35) that are boxes and talking, done with the bottom button; the
-// others (gather, carve...) keep the right one. 5: the supply box; 8: the camp's Felyne; 17: the camp's bed; 9, 33:
-// the supply box's icon again.
+// The quest prompts (the hunter's +0x32b4, 1..35) that are facilities, boxes and talking, done with the bottom
+// button; the others (gather, carve, fish, climb...) keep the right one. Seen: 5 the supply box, 9 the delivery box,
+// 8 the camp's Felyne, 17 the camp's bed, 14 a ballista, 16 a siege weapon's mount. By their HUD icon (not seen yet):
+// 33 the supply box's, and 12, 26-29, 31, 32, 34 the siege weapons' (16's).
+#define GAME_BOX_PROMPTS (1ull << 5 | 1ull << 8 | 1ull << 9 | 1ull << 12 | 1ull << 14 | 1ull << 16 | 1ull << 17 | \
+                          1ull << 26 | 1ull << 27 | 1ull << 28 | 1ull << 29 | 1ull << 31 | 1ull << 32 | 1ull << 33 | \
+                          1ull << 34)
 static inline bool game_confirm_box_prompt(uint32_t prompt) {
-    return prompt < 32 ? (1u << prompt) & (1u << 5 | 1u << 8 | 1u << 9 | 1u << 17) : prompt == 33;
+    return prompt < 64 && (GAME_BOX_PROMPTS >> prompt & 1);
 }
 
 static inline uint32_t game_confirm_swap(uint32_t b) {
