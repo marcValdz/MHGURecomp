@@ -15,6 +15,8 @@
 #include <unistd.h>
 
 #include "arcmerge.h"
+#include "btnicons.h"
+#include "config.h"
 #include "rt.h"
 
 #define EMPTY 0xFFFFFFFFu
@@ -205,6 +207,44 @@ static int merge(Dir *dst, Dir *src) {
     return changed;
 }
 
+static Dir *subdir(Dir *d, const char *name) {
+    for (int i = 0; d && i < d->ndirs; i++)
+        if (!strcasecmp(d->dirs[i]->name, name)) return d->dirs[i];
+    return NULL;
+}
+
+static File *file_in(Dir *d, const char *name) {
+    for (int i = 0; d && i < d->nfiles; i++)
+        if (!strcasecmp(d->files[i]->name, name)) return d->files[i];
+    return NULL;
+}
+
+// [Controls] GameConfirm = South: the archives with the button font, as the mods left them, with the bottom and the
+// right button's icons swapped (btnicons.c): loc/arc/resident.arc (towns) and each language's arc/quest_<lang>.arc
+static void swap_button_icons(Dir *root) {
+    Dir *nx = subdir(root, "nativeNX");
+    File *arcs[64];
+    int n = 0;
+    if ((arcs[n] = file_in(subdir(subdir(nx, "loc"), "arc"), "resident.arc"))) n++;
+    for (int i = 0; nx && i < nx->ndirs && n < 64; i++) {
+        char name[300];
+        snprintf(name, sizeof name, "quest_%s.arc", nx->dirs[i]->name);
+        if ((arcs[n] = file_in(subdir(nx->dirs[i], "arc"), name))) n++;
+    }
+    int swapped = 0;
+    for (int i = 0; i < n; i++) {
+        char out[1200];
+        struct stat st;
+        if (!btnicons_patch(arcs[i]->path, out, sizeof out) || stat(out, &st)) continue;
+        if (!arcs[i]->orig) arcs[i]->orig = strdup(arcs[i]->path);
+        free(arcs[i]->path);
+        arcs[i]->path = strdup(out);
+        arcs[i]->size = (uint64_t)st.st_size;
+        swapped++;
+    }
+    LOG("[romfs] button icons: bottom and right swapped in %d of %d archives (GameConfirm = South)\n", swapped, n);
+}
+
 static void sort_tree(Dir *d) {
     if (d->ndirs) qsort(d->dirs, d->ndirs, sizeof *d->dirs, by_name_dir);
     if (d->nfiles) qsort(d->files, d->nfiles, sizeof *d->files, by_name_file);
@@ -304,6 +344,7 @@ bool romfs_open(const char *base_dir, const char *const *overlays, int noverlays
     }
     atomic_store(&g_mods_phase, MODS_IDLE);
     uint64_t mods_ns = plat_now_ns() - t0;
+    if (g_config.game_confirm == GAME_CONFIRM_SOUTH && g_config.face_buttons == FACE_POSITION) swap_button_icons(root);
     sort_tree(root);
     Lists l = {0};
     l.dirs = malloc(sizeof *l.dirs * (l.cd = 64));

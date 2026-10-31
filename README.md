@@ -297,7 +297,9 @@ Every setting is also in `mhgurecomp.ini`, with a comment above each one that ex
   briefly black. Only made with MSAA Off; the rest is still prepared the first time it is needed. Recording more of
   it: [docs/PIPELINE_LIST.md](docs/PIPELINE_LIST.md). `LoadingIndicator` (On / Off: the "Loading" box in the bottom
   right corner while the game starts up and prepares its shaders; only in the ini, not in the settings menu)
-- `[Controls]`: `FaceButtons` (Position / Label), `MenuConfirm` (the settings menu's confirm button),
+- `[Controls]`: `FaceButtons` (Position / Label), `MenuConfirm` (the settings menu's confirm button), `GameConfirm`
+  (Original / South: the game's menus confirm with the bottom button, which also talks and opens boxes in towns and
+  gathers and carves at a prompt in quests, with the button icons to match),
   `BackgroundInput` (On / Off: the controller keeps working while the game's window is in the background, such as
   with a wiki in front of it; default On), `ComboInputWindow` (Lenient / Strict: how long the game waits for a
   second button for inputs like the Hunting Horn's X+A; Lenient, the default, as long as at 30 fps at any frame

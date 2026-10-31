@@ -1,6 +1,7 @@
 // Host-only persistence regression test. No game files or live save are used.
 // clang -Iruntime tests/test_settings.c runtime/config.c runtime/config_store.c -lSDL3 -o test-settings.exe
 #include "config.h"
+#include "game_confirm.h"
 #include "menu_confirm.h"
 #include "settings_locale.h"
 #include <SDL3/SDL.h>
@@ -213,6 +214,14 @@ int main(int argc, char **argv) {
         config_set_aa_choice(&x,AA_CHOICES);assert(x.aa==AA_CMAA2);  // (out of range)
         config_set_aa_choice(&x,AA_CHOICE_GAME);assert(x.fxaa && x.fxaa_mode==FXAA_ORIGINAL && x.aa==AA_FXAA);
     }
+    assert(config_defaults().game_confirm==GAME_CONFIRM_ORIGINAL);
+    // [Controls] GameConfirm: what the hunter and the menus get
+    assert(game_confirm_swap(0x2000)==0x4000 && game_confirm_swap(0x4001)==0x2001 && game_confirm_swap(0x6000)==0x6000);
+    assert(game_confirm_field_mode(true,false)==FIELD_SWAP && game_confirm_field_mode(true,true)==FIELD_SWAP);
+    assert(game_confirm_field_mode(false,true)==FIELD_INTERACT && game_confirm_field_mode(false,false)==FIELD_AS_IS);
+    assert(game_confirm_field(0x4000,FIELD_INTERACT)==0x2000 && game_confirm_field(0x6000,FIELD_INTERACT)==0x2000);
+    assert(game_confirm_field(0x2001,FIELD_INTERACT)==0x2001 && game_confirm_field(0x4000,FIELD_AS_IS)==0x4000);
+    assert(game_confirm_field(0x4000,FIELD_SWAP)==0x2000 && game_confirm_field(0x2000,FIELD_SWAP)==0x4000);
     fsr_config.fsr=1;fsr_config.fsr_upscaler=FSR_UP_4;fsr_config.fsr_quality=FSR_BALANCED;
     fsr_config.fsr_sharpness=.65f;fsr_config.fsr_objmotion=0;fsr_config.fsr_reactive=.35f;fsr_config.fsr_animsurf=0;
     fsr_config.msaa=8;fsr_config.fxaa=1;
@@ -266,6 +275,13 @@ int main(int argc, char **argv) {
     config_fsr_running(false);                              // then the saved MSAA and FXAA again
     assert(config_live_msaa()==8 && config_live_fxaa()==1);
     g_config=initial;config_load();assert(config_live_msaa()==8 && config_live_fxaa()==1);
+    // [Controls] GameConfirm: saved and live at once; the button icons follow at the next start
+    Config gc = config_editable(); gc.game_confirm = GAME_CONFIRM_SOUTH;
+    assert(config_save(&gc, error, sizeof error) && config_live_game_confirm() == GAME_CONFIRM_SOUTH);
+    assert(config_restart_key("GameConfirm") && config_restart_required(&gc));
+    text = read_file(path); assert(strstr(text, "GameConfirm = South")); free(text);
+    bad = gc; bad.game_confirm = 2; assert(!config_save(&bad, error, sizeof error));
+    g_config = initial; config_load(); assert(config_editable().game_confirm == GAME_CONFIRM_SOUTH);
     // [Keybinds]: SDL's key names, the mouse's, Comma for ','; up to two or None; the recomp's own keys refused
     Config keys = config_editable();
     assert(keys.binds[BIND_X][0] == KEY_MOUSE + SDL_BUTTON_LEFT && keys.binds[BIND_PLUS][1] == SDL_SCANCODE_KP_ENTER);

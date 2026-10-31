@@ -381,6 +381,7 @@ static inline const char *settings_text(int language, const char *english) {
         {"Navigation", "Navegación"},
         {"Confirm", "Confirmar"},
         {"Confirm button (recomp)", "Botón de confirmar (recomp)"},
+        {"Confirm button (game)", "Botón de confirmar (juego)"},
         {"Original", "Original"},
         {"Bottom button", "Botón inferior"},
         {"Right button", "Botón derecho"},

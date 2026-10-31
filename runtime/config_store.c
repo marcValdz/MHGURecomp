@@ -53,6 +53,7 @@ static SDL_AtomicInt live_fps;
 static SDL_AtomicInt live_vsync = {1};
 // [Controls]
 static SDL_AtomicInt live_face;
+static SDL_AtomicInt live_game_confirm;
 static SDL_AtomicInt live_menu_confirm;
 static SDL_AtomicInt live_background = {1};
 static SDL_AtomicInt live_combo;
@@ -161,6 +162,7 @@ static void publish_live(const Config *c, bool all) {
         SDL_SetAtomicInt(&live_out_w, out[0]), SDL_SetAtomicInt(&live_out_h, out[1]);
         set_float(&live_aspect, aspect);
     }
+    if (all || c->game_confirm != saved.game_confirm) SDL_SetAtomicInt(&live_game_confirm, c->game_confirm);
     for (int i = 0; i < BINDS; i++)
         for (int k = 0; k < BIND_KEYS; k++)
             if (all || c->binds[i][k] != saved.binds[i][k]) SDL_SetAtomicInt(&live_binds[i][k], c->binds[i][k]);
@@ -335,6 +337,7 @@ int config_live_bind(int bind, int slot) {
 }
 bool config_mod_bound(int bind) { return SDL_GetAtomicInt(&mod_bind_set[bind]) != 0; }
 int config_player_bind(int bind, int slot) { return SDL_GetAtomicInt(&live_binds[bind][slot]); }
+int config_live_game_confirm(void) { return SDL_GetAtomicInt(&live_game_confirm); }
 int config_live_aa(void) { return SDL_GetAtomicInt(&fsr_running) ? AA_FXAA : SDL_GetAtomicInt(&live_aa); }
 void config_live_ldn(char *server, size_t server_size, char *key, size_t key_size) {
     SDL_LockSpinlock(&live_ldn_lock);

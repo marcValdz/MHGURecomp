@@ -134,6 +134,20 @@ unverified in-game remap is shipped. Original menu consumers and their prompts
 still require separate identification and validation before this option can
 cover the game itself.
 
+## The game's confirm button
+
+Controls > Confirm button (game) persists `GameConfirm = Original|South` under
+[Controls] (runtime/hle/gameconfirm.c). South: the game's menus confirm with the
+bottom button and go back with the right one (the menu input object's getter,
+0x5de4f8, gets the two swapped); in towns the hunter's two buttons swap (the
+bottom one talks and opens boxes), and in quests the bottom button interacts
+while a prompt is shown (the pad read, 0xdac204, and the hunter's +0x32b4).
+Input follows Save at once; the button font's icons are swapped in the archives
+at the next start (runtime/btnicons.c), hence the restart mark. Needs
+FaceButtons = Position. Found by the confirm-on-x Forge plugin
+(github.com/lick-mee/mhgu-confirm-on-x), which must be removed with it on: both
+would swap.
+
 ## FSR settings
 
  Graphics & Audio exposes all seven

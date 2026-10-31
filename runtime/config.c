@@ -92,6 +92,7 @@
     /* [Controls] */                                                                                \
     .face_buttons = FACE_POSITION,                                                                  \
     .menu_confirm = MENU_CONFIRM_ORIGINAL,                                                          \
+    .game_confirm = GAME_CONFIRM_ORIGINAL,                                                          \
     .background_input = 1,                                                                          \
     .combo_window = COMBO_LENIENT,                                                                  \
     .chat_key = "/",                                                                                \
@@ -353,6 +354,13 @@ static const char DEFAULT_INI[] =
     "; Original, South (bottom button), East (right button)\n"
     "; Default: Original\n"
     "MenuConfirm = Original\n"
+    "\n"
+    "; Confirm button in the game. South: the game's menus confirm with the bottom button and go back with the right\n"
+    "; one; in towns the bottom button talks and opens boxes (the right one rolls), and in quests it also gathers and\n"
+    "; carves while a prompt is shown. The button icons follow at the next start. Needs FaceButtons = Position.\n"
+    "; Original, South (bottom button)\n"
+    "; Default: Original\n"
+    "GameConfirm = Original\n"
     "\n"
     "; Controller input is also registered if the window is out of focus\n"
     "; Default: On\n"
@@ -759,6 +767,7 @@ const ConfigSetting g_settings[] = {
     {"Controls", "FaceButtons", SET_CHOICE, F(face_buttons), 0, 0, 0, "Position|positional|nintendo,Label|labels|xbox",
      NULL, false, ERR_MISC},
     {"Controls", "MenuConfirm", SET_CHOICE, F(menu_confirm), 0, 0, 0, "Original,South,East", NULL, false, ERR_CONFIRM},
+    {"Controls", "GameConfirm", SET_CHOICE, F(game_confirm), 0, 0, 0, "Original,South", NULL, true, ERR_CONFIRM},
     ON_OFF("Controls", "BackgroundInput", background_input, false),
     ON_OFF("Controls", "MenuChord", menu_chord, false),
     {"Controls", "ComboInputWindow", SET_CHOICE, F(combo_window), 0, 0, 0, "Lenient,Strict", NULL, false, ERR_MISC},

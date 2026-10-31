@@ -367,6 +367,7 @@ bool equal(const Config &a, const Config &b) {
     SAME(language);
     SAME(menu_scale);
     SAME(menu_confirm);
+    SAME(game_confirm);
     SAME(confirm_exit);
     SAME(show_fps);
     SAME(menu_chord);
@@ -870,6 +871,7 @@ void reset_section() {
         break;
     case 2:
         c.face_buttons = f.face_buttons;
+        c.game_confirm = f.game_confirm;
         c.background_input = f.background_input;
         c.menu_chord = f.menu_chord;
         c.combo_window = f.combo_window;
@@ -1295,6 +1297,8 @@ std::vector<Row> main_rows() {
     case 2:
         add_choice(r, "face", "Face buttons", c.face_buttons, {tr("Position"), tr("Label")},
                    [](int v) { c.face_buttons = v; }, ini("FaceButtons"));
+        add_choice(r, "game.confirm", "Confirm button (game)", c.game_confirm, {tr("Original"), tr("Bottom button")},
+                   [](int v) { c.game_confirm = v; }, ini("GameConfirm"));
         add_bool(r, "background", "Background input", &c.background_input, ini("BackgroundInput"));
         add_choice(r, "combo", "Combo input window", c.combo_window, {tr("Lenient"), tr("Strict")},
                    [](int v) { c.combo_window = v; }, ini("ComboInputWindow"));

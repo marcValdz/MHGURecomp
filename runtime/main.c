@@ -94,6 +94,7 @@ static void boot(const char *root) {
     dummy_init();  // (debug, MHGU_DUMMY: runtime/hle/dummy.c)
     hitsync_init();  // (multiplayer: hits as their hunter saw them: runtime/net/hitsync.c)
     netrate_init();  // (debug, MHGU_NETRATE: runtime/hle/netrate.c)
+    gameconfirm_init();  // ([Controls] GameConfirm, confirm with the bottom button: runtime/hle/gameconfirm.c)
     cheats_init();  // (cheat codes from cheats/: runtime/cheats.c)
     discord_init();  // (Discord Rich Presence: runtime/net/discord.c, runtime/hle/presence.c)
     { void sampler_init(void); sampler_init(); }  // (debug, Windows, MHGU_SAMPLE: runtime/sampler.c)

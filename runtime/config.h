@@ -12,6 +12,7 @@ enum { DISPLAY_WINDOWED, DISPLAY_FULLSCREEN, DISPLAY_BORDERLESS };
 enum { FACE_POSITION, FACE_LABEL };
 enum { COMBO_LENIENT, COMBO_STRICT };  // [Controls] ComboInputWindow (runtime/hle/combowin.c)
 enum { MENU_CONFIRM_ORIGINAL, MENU_CONFIRM_SOUTH, MENU_CONFIRM_EAST };
+enum { GAME_CONFIRM_ORIGINAL, GAME_CONFIRM_SOUTH };  // [Controls] GameConfirm (runtime/hle/gameconfirm.c)
 enum { FXAA_ORIGINAL, FXAA_311 };  // [Anti-aliasing] FXAAMode (runtime/nvn/vulkan/exec.c)
 // [Anti-aliasing] AntiAliasing (nvn/vulkan/cmaa2.c, smaa.c, fsr.c)
 enum { AA_FXAA, AA_CMAA2, AA_SMAA, AA_SMAA_S2X, AA_SMAA_T2X, AA_SMAA_4X };
@@ -138,6 +139,7 @@ typedef struct {
     int ldn_room_serve;       // [Multiplayer] RoomServe: this game runs a suyu-style room itself (runtime/net/roomsrv.c): the pseudo room for suyu-family players
     int ldn_room_serve_port;  // [Multiplayer] RoomServePort: its port; 0 = 24872, the rooms' default
     int aa;                   // [Anti-aliasing] AntiAliasing: AA_*, what draws in the game's FXAA pass
+    int game_confirm;         // [Controls] GameConfirm: GAME_CONFIRM_*, the game's confirm button (runtime/hle/gameconfirm.c)
 } Config;
 // The hub server used when ini Server is empty (runtime/net/ldn.c, server/): the project's public one (an Oracle
 // Cloud VM; a DuckDNS name, so it can move without a release). "" = no default.
@@ -287,6 +289,7 @@ int config_live_discord(void);         // [Discord] RichPresence
 int config_live_discord_hunter(void);  // [Discord] ShowHunter
 int config_live_share_urgent(void);    // [Multiplayer] ShareUrgentCredit
 int config_live_aa(void);
+int config_live_game_confirm(void);
 void config_live_ldn(char *server, size_t server_size, char *key, size_t key_size);  // [Multiplayer] Server, Key
 bool config_restart_required(const Config *draft); // Raw cold fields vs this process's startup INI values.
 // Quick apply: the settings menu's unsaved hot values made live (config_preview), and the live values from before

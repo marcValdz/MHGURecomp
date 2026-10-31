@@ -220,9 +220,11 @@ int main() {
     assert(!settings_panel_dirty() && opened);
     tab();
     selected("face");
+    down();
+    selected("game.confirm");
     // The Keybinds submenu: a key chosen for B, then a mouse button as its second; the recomp's own keys refused
     press(ImGuiKey_Home);
-    down(4);  // (background, combo, mouse, keybinds)
+    down(5);  // (game.confirm, background, combo, mouse, keybinds)
     selected("keybinds");
     confirm();
     selected("bind.0");  // (past the section's title)
@@ -275,7 +277,7 @@ int main() {
     assert(config_live_bind(BIND_B, 0) == SDL_SCANCODE_G && config_live_bind(BIND_B, 1) == KEY_MOUSE + SDL_BUTTON_MIDDLE);
     assert(config_live_bind(BIND_X, 0) == KEY_MOUSE + SDL_BUTTON_X1);
     press(ImGuiKey_Home);
-    down(4);
+    down(5);
     confirm();
     press(ImGuiKey_End);
     press(ImGuiKey_GamepadDpadUp);
