@@ -2083,7 +2083,7 @@ void vk_fsr_init(void) {
     if (!prep_init()) { LOG("[fsr] the prep shader could not be built: FSR off\n"); g_fsr_objvel = false; return; }
     g_fsr_on = g_temporal_on = true;
     camjit_set(false, rw, rh, 8);
-    if (g_config.fsr_upscaler == FSR_UP_4) {
+    if (g_config.fsr_upscaler >= FSR_UP_4) {
         use_fsr4 = vk_fsr4_init();
         LOG("[fsr] Upscaler = FSR4: %s\n", use_fsr4 ? vk_fsr4_name() : "not available, FSR 3.1 is used");
     }

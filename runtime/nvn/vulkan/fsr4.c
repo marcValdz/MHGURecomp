@@ -17,6 +17,10 @@
 // device on the same GPU. The inputs are copied into images both APIs share, the frame so far is submitted signalling a
 // fence both share, D3D12 waits for it, upscales and signals back; the next Vulkan submission waits for that and copies
 // the picture back.
+// Route 3 has two sources for the DX12 upscaler: the DLL above, or (found first, when MHGU_FSR4_DX12 is not set) the
+// player's amdxcffx64.dll, AMD's driver library (MHGU_FSR4_AMDXC=<path>, or beside the exe), which gives FSR 4.1 on any GPU: its INT8 provider is asked for with the two IsSupported answers
+// that Optimized Clarity's stand-in DLL gives (reshade-addon/src/fsrproxy/FsrProxy.cpp, ported here), and
+// [Upscaler] Upscaler = FSR4 picks its full model, FSR4Lite its smaller one (the model is read when a context is made).
 // None of them: FSR 3.1 (fsr.c).
 //
 //   MHGU_FSR_DEBUG=1   FFX debug checking of the inputs (messages in the log)
@@ -26,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../config.h"
 #include "../../rt.h"
 #include "fsr4.h"
 
@@ -120,6 +125,9 @@ static uint32_t ctx_rw, ctx_rh, ctx_ow, ctx_oh;
 static bool loaded, failed, extensions_ok, linear_in;  // linear_in: MHGU_FSR4_LINEAR=1 (A/B: the colour is not flagged as gamma-encoded)
 static bool bridge_ok;  // route 3: the device has what sharing images and a fence with D3D12 takes (instead of FSR 4's own needs)
 static uint64_t frames;
+// amdxcffx64.dll (route 3's second source): model_lite is what the IsSupported answers read while a context is made
+static bool via_amdxc, xc_lite_ok, model_lite, ctx_lite;
+static const char *model_name(void) { return !via_amdxc ? "" : model_lite ? ", Lite model" : ", full model"; }
 
 // ================================================================== the device
 static bool has_ext(const VkExtensionProperties *ep, uint32_t n, const char *name) {
@@ -476,18 +484,128 @@ static uint64_t dx_tick_hz;
 static double stat_gpu_ms, stat_wait_ms;
 static uint32_t stat_n;
 
+// ---- amdxcffx64.dll: AMD's driver FFX library, used the way Optimized Clarity's stand-in does. It exports only
+// UpdateFfxApiProvider, which fills in the provider's functions; the INT8 FSR 4.1 provider runs when its IsSupported
+// (vtable slot 2, found through the class's RTTI) says yes, so that is answered for the INT8 classes and refused for the
+// FP8 and RDNA 2 ones. The library also asks whether AMD's loader / upscaler modules are loaded: it is told it is itself.
+static HMODULE xc;
+static ExternalProvider xc_prov;
+static bool xc_full(void *a, void *b) { (void)a, (void)b; return !model_lite; }
+static bool xc_lite(void *a, void *b) { (void)a, (void)b; return model_lite; }
+static bool xc_no(void *a, void *b) { (void)a, (void)b; return false; }
+static HMODULE WINAPI xc_gmh(LPCWSTR name) { return name && !_wcsnicmp(name, L"amd_fidelityfx_", 15) ? xc : GetModuleHandleW(name); }
+
+static void **find_vtable(HMODULE m, const char *name) {
+    uint8_t *base = (uint8_t *)m;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(base + ((IMAGE_DOS_HEADER *)base)->e_lfanew);
+    IMAGE_SECTION_HEADER *sec = IMAGE_FIRST_SECTION(nt);
+    size_t len = strlen(name) + 1;
+    uint8_t *desc = NULL, *loc = NULL;
+    for (int pass = 0; pass < 3; pass++) {
+        for (int i = 0; i < nt->FileHeader.NumberOfSections; i++) {
+            if (!(sec[i].Characteristics & IMAGE_SCN_MEM_READ)) continue;
+            uint8_t *start = base + sec[i].VirtualAddress, *end = start + sec[i].Misc.VirtualSize;
+            if (pass == 0) {  // the type descriptor: its name string follows two pointers
+                for (uint8_t *p = start; p + len <= end && !desc; p++)
+                    if (!memcmp(p, name, len)) desc = p - 0x10;
+            } else if (pass == 1 && desc) {  // the complete object locator pointing at it (and at itself)
+                for (uint8_t *p = start; p + 24 <= end && !loc; p += 4) {
+                    uint32_t *w = (uint32_t *)p;
+                    if (w[0] == 1 && w[1] == 0 && w[3] == (uint32_t)(desc - base) && w[5] == (uint32_t)(p - base)) loc = p;
+                }
+            } else if (pass == 2 && loc) {  // the vtable: its slot -1 points at the locator
+                for (uint8_t *p = start; p + 16 <= end; p += 8)
+                    if (*(uint8_t **)p == loc) return (void **)(p + 8);
+            }
+        }
+    }
+    return NULL;
+}
+
+static bool set_is_supported(HMODULE m, const char *class_name, void *fn) {
+    void **vt = find_vtable(m, class_name);
+    DWORD old;
+    if (!vt || !VirtualProtect(&vt[2], sizeof(void *), PAGE_READWRITE, &old)) return false;
+    vt[2] = fn;
+    VirtualProtect(&vt[2], sizeof(void *), old, &old);
+    return true;
+}
+
+static bool replace_import(HMODULE m, const char *fn, void *repl) {
+    uint8_t *b = (uint8_t *)m;
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(b + ((IMAGE_DOS_HEADER *)b)->e_lfanew);
+    IMAGE_DATA_DIRECTORY dd = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dd.VirtualAddress) return false;
+    for (IMAGE_IMPORT_DESCRIPTOR *d = (IMAGE_IMPORT_DESCRIPTOR *)(b + dd.VirtualAddress); d->Name; d++) {
+        IMAGE_THUNK_DATA *t = (IMAGE_THUNK_DATA *)(b + d->FirstThunk), *o = (IMAGE_THUNK_DATA *)(b + (d->OriginalFirstThunk ? d->OriginalFirstThunk : d->FirstThunk));
+        for (; o->u1.AddressOfData; o++, t++) {
+            if (IMAGE_SNAP_BY_ORDINAL(o->u1.Ordinal) || strcmp((const char *)((IMAGE_IMPORT_BY_NAME *)(b + o->u1.AddressOfData))->Name, fn)) continue;
+            DWORD old;
+            if (!VirtualProtect(&t->u1.Function, sizeof t->u1.Function, PAGE_READWRITE, &old)) return false;
+            t->u1.Function = (ULONG_PTR)repl;
+            VirtualProtect(&t->u1.Function, sizeof t->u1.Function, old, &old);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool find_amdxc(wchar_t *out) {
+    const char *env = getenv("MHGU_FSR4_AMDXC");
+    if (env) {
+        MultiByteToWideChar(CP_UTF8, 0, env, -1, out, MAX_PATH);
+        if (GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES) return true;
+        LOG("[fsr4] MHGU_FSR4_AMDXC=%s does not exist\n", env);
+        out[0] = 0;
+        return false;
+    }
+    GetModuleFileNameW(NULL, out, MAX_PATH);
+    wchar_t *slash = wcsrchr(out, L'\\');
+    if (slash) {
+        wcscpy(slash + 1, L"amdxcffx64.dll");
+        if (GetFileAttributesW(out) != INVALID_FILE_ATTRIBUTES) return true;
+    }
+    out[0] = 0;
+    return false;
+}
+
+static bool init_amdxc(const wchar_t *path) {
+    xc = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    if (!xc) { LOG("[fsr4] %ls could not be loaded (error %lu)\n", path, GetLastError()); return false; }
+    char ver[32];
+    file_version(path, ver, sizeof ver);
+    LOG("[fsr4] amdxcffx64.dll %ls, file version %s\n", path, ver);
+    HRESULT (*update)(void *, uint32_t) = (void *)GetProcAddress(xc, "UpdateFfxApiProvider");
+    if (!update) { LOG("[fsr4] the library has no UpdateFfxApiProvider\n"); return false; }
+    if (!set_is_supported(xc, ".?AVffxProvider_FSR4_Int8@@", (void *)xc_full)) { LOG("[fsr4] the library has no INT8 FSR 4 provider\n"); return false; }
+    replace_import(xc, "GetModuleHandleW", (void *)xc_gmh);
+    set_is_supported(xc, ".?AVffxProvider_FSR4@@", (void *)xc_no);
+    set_is_supported(xc, ".?AVffxProvider_FSR4_Int8_Navi2@@", (void *)xc_no);
+    xc_lite_ok = set_is_supported(xc, ".?AVffxProvider_FSR4Lite_Int8@@", (void *)xc_lite);
+    xc_prov = (ExternalProvider){.structVersion = 2, .descType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE};
+    HRESULT hr = update(&xc_prov, 0x50);
+    if (FAILED(hr) || !xc_prov.provider.createContext) { LOG("[fsr4] the library gave no upscaler provider (0x%08x)\n", (unsigned)hr); return false; }
+    f_create = xc_prov.provider.createContext, f_destroy = xc_prov.provider.destroyContext, f_dispatch = xc_prov.provider.dispatch;
+    loader_ver = xc_prov.provider.versionId;
+    snprintf(prov_name, sizeof prov_name, "FSR %s", xc_prov.provider.versionName ? xc_prov.provider.versionName : "4.1");
+    for (char *c = prov_name + strlen(prov_name); c > prov_name && (c[-1] == '*' || c[-1] == ' '); c--) c[-1] = 0;
+    LOG("[fsr4] amdxcffx64.dll provider \"%s\" id %#llx, Lite model %s\n", prov_name, (unsigned long long)loader_ver, xc_lite_ok ? "available" : "NOT in this library");
+    via_amdxc = true;
+    return true;
+}
+
 static bool init_dx12(void) {
     if (!bridge_ok) return false;
-    wchar_t path[MAX_PATH] = {0};
+    wchar_t path[MAX_PATH] = {0}, xcpath[MAX_PATH] = {0};
     const char *env = getenv("MHGU_FSR4_DX12");
     if (env) MultiByteToWideChar(CP_UTF8, 0, env, -1, path, MAX_PATH);
-    else {
+    else if (!find_amdxc(xcpath)) {
         GetModuleFileNameW(NULL, path, MAX_PATH);
         wchar_t *slash = wcsrchr(path, L'\\');
         if (slash) wcscpy(slash + 1, L"amd_fidelityfx_upscaler_dx12.dll"); else path[0] = 0;
     }
-    if (!path[0] || GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
-        LOG("[fsr4] no DX12 upscaler supplied (amd_fidelityfx_upscaler_dx12.dll beside the exe, or MHGU_FSR4_DX12=<path>)\n");
+    if (!xcpath[0] && (!path[0] || GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES)) {
+        LOG("[fsr4] no DX12 upscaler supplied (amdxcffx64.dll beside the exe, MHGU_FSR4_AMDXC=<path>, amd_fidelityfx_upscaler_dx12.dll beside the exe, or MHGU_FSR4_DX12=<path>)\n");
         return false;
     }
     // the D3D12 device on the Vulkan device's GPU
@@ -542,8 +660,13 @@ static bool init_dx12(void) {
     if (vr == VK_SUCCESS) vr = import_sem(g_vk.dev, &ii);
     CloseHandle(fh);
     if (vr != VK_SUCCESS) { LOG("[fsr4] the D3D12 fence could not be shared with Vulkan (%d)\n", vr); return false; }
+    if (xcpath[0]) {
+        if (!init_amdxc(xcpath)) return false;
+        via_dx12 = true;
+        return true;
+    }
     // the upscaler, asked for its FSR 4 on this device
-    HMODULE up = LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    HMODULE up =LoadLibraryExW(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!up) { LOG("[fsr4] %ls could not be loaded (error %lu)\n", path, GetLastError()); return false; }
     char ver[32];
     file_version(path, ver, sizeof ver);
@@ -780,8 +903,8 @@ static bool dx12_begin(const Fsr4Dispatch *d) {
             ID3D12Resource_Unmap(dx_times_rb, 0, &none);
         }
         if (stat_n == 120) {
-            LOG("[fsr4] D3D12 route, average of 120 upscales: %.3f ms GPU (D3D12 timestamps), %.3f ms CPU waiting for a list\n",
-                stat_gpu_ms / stat_n, stat_wait_ms / stat_n);
+            LOG("[fsr4] D3D12 route%s, %ux%u -> %ux%u, average of 120 upscales: %.3f ms GPU (D3D12 timestamps), %.3f ms CPU waiting for a list\n",
+                model_name(), ctx_rw, ctx_rh, ctx_ow, ctx_oh, stat_gpu_ms / stat_n, stat_wait_ms / stat_n);
             stat_gpu_ms = stat_wait_ms = 0, stat_n = 0;
         }
     }
@@ -830,8 +953,21 @@ static void dx12_run(const Fsr4Dispatch *d) {
 #endif
 
 static bool make_context(const Fsr4Dispatch *d) {
-    if (ctx && ctx_rw == d->render[0] && ctx_rh == d->render[1] && ctx_ow == d->out[0] && ctx_oh == d->out[1]) return true;
-    if (ctx) { f_destroy(&ctx, NULL); ctx = NULL; }
+    bool lite = via_amdxc && xc_lite_ok && g_config.fsr_upscaler == FSR_UP_4_LITE;
+    if (ctx && ctx_rw == d->render[0] && ctx_rh == d->render[1] && ctx_ow == d->out[0] && ctx_oh == d->out[1] && ctx_lite == lite) return true;
+    if (ctx) {  // (a size or the model changed: the model is read when a context is made)
+#if FSR4_DX12_BRIDGE
+        if (via_dx12) {  // (the old context's last dispatch has run on D3D12)
+            vkDeviceWaitIdle(g_vk.dev);
+            ID3D12Fence_SetEventOnCompletion(dx_fence, bridge_val, dx_event);
+            WaitForSingleObject(dx_event, 10000);
+            stat_gpu_ms = stat_wait_ms = 0, stat_n = 0;  // (the timing average restarts for the new model / size)
+        }
+#endif
+        f_destroy(&ctx, NULL);
+        ctx = NULL;
+    }
+    model_lite = lite;
     // LDR, gamma-encoded colour (the post-processed picture), standard depth, render-size motion vectors without jitter
     struct ffxCreateContextDescUpscale cu = {.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE,
                                       .flags = (linear_in ? 0 : FFX_UPSCALE_ENABLE_NON_LINEAR_COLORSPACE) | (getenv("MHGU_FSR_DEBUG") ? FFX_UPSCALE_ENABLE_DEBUG_CHECKING : 0),
@@ -850,9 +986,9 @@ static bool make_context(const Fsr4Dispatch *d) {
     uint64_t t0 = plat_now_ns();
     ffxReturnCode_t rc = f_create(&ctx, &cu.header, NULL);
     if (rc != FFX_API_RETURN_OK || !ctx) { ctx = NULL; return fail("the FSR 4 context could not be created", (int)rc); }
-    ctx_rw = d->render[0], ctx_rh = d->render[1], ctx_ow = d->out[0], ctx_oh = d->out[1];
-    LOG("[fsr4] %s context %ux%u -> %ux%u created in %.0f ms (non-linear colour; colour VkFormat %d, depth %d, motion vectors %d, "
-        "reactive %d, output %d)\n", prov_name, ctx_rw, ctx_rh, ctx_ow, ctx_oh, (plat_now_ns() - t0) / 1e6, d->color.format,
+    ctx_rw = d->render[0], ctx_rh = d->render[1], ctx_ow = d->out[0], ctx_oh = d->out[1], ctx_lite = lite;
+    LOG("[fsr4] %s%s context %ux%u -> %ux%u created in %.0f ms (non-linear colour; colour VkFormat %d, depth %d, motion vectors %d, "
+        "reactive %d, output %d)\n", prov_name, model_name(), ctx_rw, ctx_rh, ctx_ow, ctx_oh, (plat_now_ns() - t0) / 1e6, d->color.format,
         d->depth.format, d->motion.format, d->reactive.image ? d->reactive.format : 0, d->output.format);
     return true;
 }

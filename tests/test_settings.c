@@ -227,7 +227,7 @@ int main(int argc, char **argv) {
     assert(fabsf(config_live_fsr_sharpness()-.2f)<.001f && fabsf(config_live_fsr_reactive()-.5f)<.001f);
     assert(!config_restart_key("Sharpness") && !config_restart_key("Reactive"));
     bad=fsr_saved;bad.fsr_quality=5;assert(!config_save(&bad,error,sizeof error));
-    bad=fsr_saved;bad.fsr_upscaler=2;assert(!config_save(&bad,error,sizeof error));
+    bad=fsr_saved;bad.fsr_upscaler=3;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_sharpness=NAN;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_reactive=1.1f;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_objmotion=2;assert(!config_save(&bad,error,sizeof error));
