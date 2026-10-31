@@ -176,6 +176,8 @@ bool shader_prewarm_progress(uint64_t *done, uint64_t *total);  // (the indicato
 void backend_execute(uint64_t handle);            // run a recorded command list (guest address of its first record)
 void backend_present(NvnTexture *tex);            // show a texture in the window
 void backend_texture_destroyed(NvnTexture *tex);
+// A level 0 region's data (row after row), applied at the texture's next use (any thread)
+void renderer_upload_region(NvnTexture *t, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void *data, size_t size);
 void backend_pool_written(uint64_t addr, uint64_t size);
 void backend_program_created(const NvnProgram *p);  // nvnProgramSetShaders (the renderer may prepare it ahead of use)
 void backend_photo_requested(void);  // the game asked for its quest photo (tools/gen.py: 0xa6f97c): drawn in the next frames

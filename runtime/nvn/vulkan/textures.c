@@ -10,6 +10,7 @@
 #include "vk.h"
 #include "../astc.h"
 #include "../bcn.h"
+#include "../../btnicons.h"
 
 // ================================================================== formats
 typedef struct { VkFormat vf; uint8_t expand_rgb, alpha_one; } VkFmt;
@@ -428,6 +429,7 @@ void backend_texture_destroyed(NvnTexture *t) {
     if (b) {
         destroy_image(b);
         free(b->pending_rgba);
+        for (int i = 0; i < b->npending_regions; i++) free(b->pending_regions[i].data);
         free(b);
     }
     t->backend = NULL;
@@ -519,6 +521,23 @@ static void upload_pending(TexBackend *b) {
     vkCmdCopyBufferToImage(vk_upload_cmd(), s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
 }
 
+static void upload_regions(TexBackend *b) {
+    pthread_mutex_lock(&pending_lock);
+    int n = b->npending_regions;
+    typeof(b->pending_regions[0]) r[4];
+    memcpy(r, b->pending_regions, sizeof r);
+    b->npending_regions = 0;
+    pthread_mutex_unlock(&pending_lock);
+    for (int i = 0; i < n; i++) {
+        VkSpan s = vk_transient_copy(r[i].data, r[i].size, 16);
+        free(r[i].data);
+        VkBufferImageCopy rg = {.bufferOffset = s.off, .bufferRowLength = r[i].w, .bufferImageHeight = r[i].h,
+                                .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
+                                .imageOffset = {(int32_t)r[i].x, (int32_t)r[i].y, 0}, .imageExtent = {r[i].w, r[i].h, 1}};
+        vkCmdCopyBufferToImage(vk_upload_cmd(), s.buf, b->image, VK_IMAGE_LAYOUT_GENERAL, 1, &rg);
+    }
+}
+
 static uint64_t full_hash_budget, full_hash_budget_frame;
 
 static void upload_texture(NvnTexture *t, TexBackend *b) {
@@ -591,6 +610,8 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
             } else {
                 tegra_deswizzle(src, lin, l.wb, l.hb, l.d, fi->bpb, l.block_height_log2, l.block_depth_log2);
             }
+            if (!lv && !layer && l.d == 1 && fi->bpb == 16)  // (the field prompts' button icon: runtime/btnicons.c)
+                btnicons_copied(t, lin, l.w, l.h, t->format);
             if (expand) {  // RGB8 -> RGBA8
                 uint8_t *o = s.ptr;
                 uint64_t n = (uint64_t)l.wb * l.hb * l.d;
@@ -614,6 +635,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
 TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     TexBackend *b = tex_backend(t);
     if (b->pending_rgba) upload_pending(b);
+    if (b->npending_regions) upload_regions(b);
     if (for_render) b->gpu_owned = true;
     else if (!b->gpu_owned) {
         // (timed for MHGU_VK_STATS only: this runs for every texture of every draw)
@@ -675,6 +697,19 @@ void renderer_upload_rgba(NvnTexture *t, const void *rgba, uint32_t w, uint32_t 
     b->pending_rgba = copy;
     b->pending_w = w; b->pending_h = h; b->pending_stride = stride;
     b->gpu_owned = true;
+    pthread_mutex_unlock(&pending_lock);
+}
+
+// A level 0 region's data (texels, or blocks of a compressed format, row after row; any thread): applied on the
+// render thread at the texture's next use, after the regions queued before it
+void renderer_upload_region(NvnTexture *t, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void *data, size_t size) {
+    TexBackend *b = t->backend;
+    if (!b) return;
+    void *copy = malloc(size);
+    memcpy(copy, data, size);
+    pthread_mutex_lock(&pending_lock);
+    if (b->npending_regions < 4) b->pending_regions[b->npending_regions++] = (typeof(b->pending_regions[0])){x, y, w, h, copy, size};
+    else free(copy);
     pthread_mutex_unlock(&pending_lock);
 }
 

@@ -229,7 +229,7 @@ static void swap_button_icons(Dir *root) {
     for (int i = 0; nx && i < nx->ndirs && n < 64; i++) {
         char name[300];
         snprintf(name, sizeof name, "quest_%s.arc", nx->dirs[i]->name);
-        if ((arcs[n] = file_in(subdir(nx->dirs[i], "arc"), name))) n++;
+        if ((arcs[n] = file_in(subdir(nx->dirs[i], "arc"), name))) btnicons_learn_hud(arcs[n++]->path);
     }
     int swapped = 0;
     for (int i = 0; i < n; i++) {

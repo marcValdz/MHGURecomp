@@ -137,14 +137,17 @@ cover the game itself.
 ## The game's confirm button
 
 Controls > Confirm button (game) persists `GameConfirm = Original|South` under
-[Controls] (runtime/hle/gameconfirm.c). South: the game's menus confirm with the
-bottom button and go back with the right one (the menu input object's getter,
-0x5de4f8, gets the two swapped); in towns the hunter's two buttons swap (the
-bottom one talks and opens boxes), and in quests the bottom button interacts
-while a prompt is shown (the pad read, 0xdac204, and the hunter's +0x32b4).
+[Controls] (runtime/hle/gameconfirm.c). South follows newer Monster Hunter
+games: the game's menus confirm with the bottom button and go back with the
+right one (the menu input object's getter, 0x5de4f8, gets the two swapped); in
+towns the hunter's two buttons swap (the bottom one talks and opens boxes; towns
+have no prompt to tell those by), and in quests a box's, the bed's or the camp
+Felyne's prompt takes the bottom button while gathering and carving keep the
+right one (the pad read, 0xdac204, and the hunter's +0x32b4, game_confirm.h).
 Input follows Save at once; the button font's icons are swapped in the archives
-at the next start (runtime/btnicons.c), hence the restart mark. Needs
-FaceButtons = Position. Found by the confirm-on-x Forge plugin
+at the next start, and the quest prompts' one button sprite as prompts come and
+go, in the renderer's copy of the HUD texture (runtime/btnicons.c), hence the
+restart mark. Needs FaceButtons = Position. Found by the confirm-on-x Forge plugin
 (github.com/lick-mee/mhgu-confirm-on-x), which must be removed with it on: both
 would swap.
 

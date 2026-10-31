@@ -19,6 +19,9 @@ void backend_present(NvnTexture *tex) {
     plat_sleep_until_ns(plat_now_ns() + 16666667);
 }
 void backend_texture_destroyed(NvnTexture *tex) { (void)tex; }
+void renderer_upload_region(NvnTexture *t, uint32_t x, uint32_t y, uint32_t w, uint32_t h, const void *data, size_t size) {
+    (void)t, (void)x, (void)y, (void)w, (void)h, (void)data, (void)size;
+}
 void backend_pool_written(uint64_t addr, uint64_t size) { (void)addr; (void)size; }
 void backend_program_created(const NvnProgram *p) { (void)p; }
 void backend_photo_requested(void) {}

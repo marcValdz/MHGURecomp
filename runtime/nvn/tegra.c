@@ -97,6 +97,11 @@ static inline uint64_t gob_offset(uint32_t xb, uint32_t y, uint32_t z, uint32_t 
     return off;
 }
 
+uint64_t tegra_block_offset(uint32_t bx, uint32_t by, uint32_t wb, uint32_t hb, uint32_t bpb, uint32_t bh_log2) {
+    uint32_t gob_rows = 8u << bh_log2;
+    return gob_offset(bx * bpb, by, 0, (wb * bpb + 63) / 64, bh_log2, 0, (hb + gob_rows - 1) / gob_rows);
+}
+
 static void copy_surface(const uint8_t *src, uint8_t *dst, uint32_t wb, uint32_t hb, uint32_t d, uint32_t bpb,
                          uint32_t bh_log2, uint32_t bd_log2, bool to_linear) {
     uint32_t row_bytes = wb * bpb;

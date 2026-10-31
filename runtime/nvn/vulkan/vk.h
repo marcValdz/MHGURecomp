@@ -138,6 +138,8 @@ typedef struct TexBackend {
     bool presented;
     void *pending_rgba;  // host-produced pixels waiting to be uploaded on the render thread
     uint32_t pending_w, pending_h, pending_stride;
+    struct { uint32_t x, y, w, h; void *data; size_t size; } pending_regions[4];  // (renderer_upload_region) and level 0 regions
+    int npending_regions;
     uint8_t astc_bw, astc_bh;  // ASTC without GPU support: decoded to RGBA8 on upload (runtime/nvn/astc.c)
     bool astc_srgb;
     uint8_t bcn;               // BC without GPU support (BCN_*): decoded on upload (runtime/nvn/bcn.c)

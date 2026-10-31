@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../btnicons.h"
 #include "../kernel.h"
 #include "nvn.h"
 
@@ -348,6 +349,7 @@ NVN(nvnTextureInitialize) {
 }
 NVN(nvnTextureFinalize) {
     NvnTexture *t = HOST(NvnTexture, A(0));
+    if (t) btnicons_texture_gone(t);
     if (t) { backend_texture_destroyed(t); free(t); }
     SET_HOST(A(0), 0);
 }

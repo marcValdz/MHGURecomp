@@ -24,6 +24,7 @@
 #endif
 
 #include "../../hle/rendersize.h"
+#include "../../btnicons.h"
 #include "../../kernel.h"
 #include "fsr.h"
 #include "hdr.h"
@@ -4574,6 +4575,8 @@ static void copy_buffer_to_texture(uint64_t src, const TexRef *dst) {
         }
     }
     free(blocks);
+    if (!decode && !level && !rg[0] && !rg[1] && nz == 1 && out_bpb == 16)  // (the field prompts' button icon: runtime/btnicons.c)
+        btnicons_copied(t, s.ptr, (uint32_t)rg[3], (uint32_t)rg[4], t->format);
     VkBufferImageCopy c = {.bufferOffset = s.off, .bufferRowLength = decode ? (uint32_t)rg[3] : wb * fi->bw,
                            .bufferImageHeight = decode ? (uint32_t)rg[4] : hb * fi->bh,
                            .imageSubresource = {b->aspect & VK_IMAGE_ASPECT_DEPTH_BIT ? VK_IMAGE_ASPECT_DEPTH_BIT : b->aspect,

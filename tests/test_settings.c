@@ -217,10 +217,12 @@ int main(int argc, char **argv) {
     assert(config_defaults().game_confirm==GAME_CONFIRM_ORIGINAL);
     // [Controls] GameConfirm: what the hunter and the menus get
     assert(game_confirm_swap(0x2000)==0x4000 && game_confirm_swap(0x4001)==0x2001 && game_confirm_swap(0x6000)==0x6000);
-    assert(game_confirm_field_mode(true,false)==FIELD_SWAP && game_confirm_field_mode(true,true)==FIELD_SWAP);
-    assert(game_confirm_field_mode(false,true)==FIELD_INTERACT && game_confirm_field_mode(false,false)==FIELD_AS_IS);
-    assert(game_confirm_field(0x4000,FIELD_INTERACT)==0x2000 && game_confirm_field(0x6000,FIELD_INTERACT)==0x2000);
-    assert(game_confirm_field(0x2001,FIELD_INTERACT)==0x2001 && game_confirm_field(0x4000,FIELD_AS_IS)==0x4000);
+    assert(game_confirm_field_mode(true,0)==FIELD_SWAP && game_confirm_field_mode(true,5)==FIELD_SWAP);
+    assert(game_confirm_field_mode(false,5)==FIELD_BOX && game_confirm_field_mode(false,33)==FIELD_BOX);
+    assert(game_confirm_field_mode(false,1)==FIELD_AS_IS && game_confirm_field_mode(false,10)==FIELD_AS_IS);
+    assert(game_confirm_field_mode(false,0)==FIELD_AS_IS && game_confirm_field_mode(false,40)==FIELD_AS_IS);
+    assert(game_confirm_field(0x4000,FIELD_BOX)==0x2000 && game_confirm_field(0x6000,FIELD_BOX)==0x2000);
+    assert(game_confirm_field(0x2001,FIELD_BOX)==0x0001 && game_confirm_field(0x4000,FIELD_AS_IS)==0x4000);
     assert(game_confirm_field(0x4000,FIELD_SWAP)==0x2000 && game_confirm_field(0x2000,FIELD_SWAP)==0x4000);
     fsr_config.fsr=1;fsr_config.fsr_upscaler=FSR_UP_4;fsr_config.fsr_quality=FSR_BALANCED;
     fsr_config.fsr_sharpness=.65f;fsr_config.fsr_objmotion=0;fsr_config.fsr_reactive=.35f;fsr_config.fsr_animsurf=0;

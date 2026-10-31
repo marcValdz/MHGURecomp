@@ -35,6 +35,9 @@ LevelLayout tegra_level(const TexLayout *t, uint32_t level);
 uint64_t tegra_layer_size(const TexLayout *t);
 uint64_t tegra_total_size(const TexLayout *t);
 
+// Where block (bx, by) of a 2D block-linear level (wb x hb blocks of bpb bytes) starts.
+uint64_t tegra_block_offset(uint32_t bx, uint32_t by, uint32_t wb, uint32_t hb, uint32_t bpb, uint32_t bh_log2);
+
 // Copy a block-linear level slice into a linear buffer (row pitch = wb * bpb).
 void tegra_deswizzle(const uint8_t *src, uint8_t *dst, uint32_t wb, uint32_t hb, uint32_t d, uint32_t bpb,
                      uint32_t block_height_log2, uint32_t block_depth_log2);
