@@ -321,7 +321,8 @@ starting with its name in square brackets:
 - Turn single cheats on and off in the settings menu (F1), on the Cheats tab: it takes effect when you press Save,
   without a restart, and is remembered in `cheats\_off.txt`. Turning off a cheat that changes the game's code puts
   the original code back; values a cheat already changed (money, items) stay as they are. Master codes (`{Name}`)
-  are always on. Cheats added to the folder show up after a restart. Online, only use cheats when everyone in the
+  are always on. Cheat files added, edited or removed count the next time the settings menu opens. Online, only use
+  cheats when everyone in the
   lobby agrees to it.
 - To turn off a file without deleting it, start its name with `_`.
 - Cheats that change the game's code also work: the port runs each changed function in an interpreter. That
