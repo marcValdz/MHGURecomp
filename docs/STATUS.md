@@ -1221,14 +1221,6 @@ The app is on an Android TV home screen (LEANBACK_LAUNCHER and a banner; phones 
 the game files where they are, for example on a USB drive: Game files folder in the settings' Android tab, or Use where they are
 at the first start. Details and what is untested: docs/research/android.md "Android TV and game files on a drive".
 
-## FSR 4 removed (2026-11-01)
-
-`Upscaler = FSR4` is gone: fsr4.c / fsr4.h, third_party/ffx-api, docs/FSR4-PORT.md, the FSR4_DRIVER_PATCH build option
-and the settings row. A release could only use it with a loader DLL the player supplied, the maintainer's GPU can't test
-it, and bundling AMD's SDK DLLs (PR 168) would add 36 MB (uncompressed) for few players. FSR 3.1 stays. An ini that still
-has `Upscaler = ...` loads as before: the line is logged as an unknown setting, ignored and kept. The instance asks for
-Vulkan 1.2 in every case now.
-
 ## Interpreter: pre-decoded blocks (2026-11-06, branch perf/interp-blocks)
 
 Asked for MH4U Port (reports: slow loading screens, frame drops with a bowgun even in the village, a laggy item box;

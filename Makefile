@@ -245,7 +245,11 @@ FFX_GPU  := $(FFX)/include/FidelityFX/gpu
 FFX_PASS := $(FFX)/src/backends/vk/shaders/fsr3upscaler
 $(O)/fsr/src/ffx_fsr3_glsl.c.o: FSRFLAGS += -DFFX_GPU_DIR='"$(FFX_GPU)"' -DFFX_PASS_DIR='"$(FFX_PASS)"'
 $(O)/fsr/src/ffx_fsr3_glsl.c.o: $(wildcard $(FFX_GPU)/*.h $(FFX_GPU)/*/*.h $(FFX_PASS)/*.glsl)
-RTFLAGS  += -I$(FSR)/include
+RTFLAGS  += -I$(FSR)/include -Ithird_party/ffx-api
+# FSR4_DRIVER_PATCH=1 (opt-in): FSR 4 can use the AMD driver's own amdvkffx64.dll directly, which needs one in-memory patch of
+# that DLL's GetModuleHandleW import (runtime/nvn/vulkan/fsr4.c, docs/FSR4-PORT.md). The default, FSR4_DRIVER_PATCH=0, leaves
+# all of that code out: nothing of AMD's is touched, and FSR 4 is only used through a loader DLL the player supplies (else FSR 3.1).
+FSR4_DRIVER_PATCH ?= 0
 .DEFAULT_GOAL := all
 # CMAA2 (runtime/nvn/vulkan/cmaa2.c): third_party/cmaa2/CMAA2.hlsl, embedded with .incbin, compiled from the HLSL at run
 # time; Apache-2.0, from github.com/GameTechDev/CMAA2 with two changes for glslang (marked at its top).
@@ -254,6 +258,11 @@ $(O)/rt/nvn/vulkan/cmaa2.o: third_party/cmaa2/CMAA2.hlsl
 # directory make runs in), and its area / search textures as C arrays; MIT, unchanged from github.com/iryoku/smaa.
 $(O)/rt/nvn/vulkan/smaa.o: third_party/smaa/SMAA.hlsl third_party/smaa/Textures/AreaTex.h third_party/smaa/Textures/SearchTex.h
 $(O)/rt/nvn/vulkan/smaa.o: RTFLAGS += -Ithird_party/smaa/Textures
+FSR4_STAMP := $(O)/fsr4_patch_$(FSR4_DRIVER_PATCH).stamp
+$(FSR4_STAMP):
+	@mkdir -p $(O) && rm -f $(O)/fsr4_patch_*.stamp && touch $@
+$(O)/rt/nvn/vulkan/fsr4.o: $(FSR4_STAMP)
+$(O)/rt/nvn/vulkan/fsr4.o: RTFLAGS += -DFSR4_DRIVER_PATCH=$(FSR4_DRIVER_PATCH)
 # NULL_GPU=1: no renderer (runtime/nvn/backend_null.c: the game runs, nothing is drawn)
 ifeq ($(NULL_GPU),1)
 RTFLAGS  += -DMHGU_NULL_BACKEND

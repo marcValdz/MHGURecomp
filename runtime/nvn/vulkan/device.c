@@ -21,6 +21,7 @@
 #include "../../overlay.h"
 #include "fsr.h"
 #include "hdr.h"
+#include "fsr4.h"
 #include "vk.h"
 
 VkG g_vk;
@@ -101,7 +102,7 @@ static void create_instance(void) {
     const char *layers[] = {"VK_LAYER_KHRONOS_validation"};
     VkApplicationInfo app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO, .pApplicationName = "MHGURecomp",
                              .pEngineName = "MHGURecomp",
-                             .apiVersion = VK_API_VERSION_1_2};
+                             .apiVersion = g_config.fsr && g_config.fsr_upscaler == FSR_UP_4 ? VK_API_VERSION_1_3 : VK_API_VERSION_1_2};  // (FSR 4's shaders use SPIR-V 1.6)
     VkInstanceCreateInfo ci = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, .pApplicationInfo = &app,
                                .enabledExtensionCount = n_ext, .ppEnabledExtensionNames = ext,
                                .enabledLayerCount = validate ? 1 : 0, .ppEnabledLayerNames = layers};
@@ -218,6 +219,7 @@ static void create_device(void) {
         g_vk.no_mirror_clamp = !has_ext(ep, ne, VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME);
         if (!g_vk.no_mirror_clamp) ext[n_ext++] = VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME;
     }
+    bool fsr4 = g_config.fsr && g_config.fsr_upscaler == FSR_UP_4 && vk_fsr4_device_exts(ep, ne, ext, &n_ext);  // FSR 4: its extensions
     free(ep);
 
     // optional features: whatever the GPU has of what the backend can use
@@ -282,6 +284,7 @@ static void create_device(void) {
         b->shaderStorageImageReadWithoutFormat = h->shaderStorageImageReadWithoutFormat;
         f12.shaderFloat16 = b->shaderInt16 = g_vk.fsr_fp16 = f12_have.shaderFloat16 && h->shaderInt16;  // (both, or neither)
     }
+    if (fsr4) vk_fsr4_device_features(&f11, &f12, b);  // FSR 4: cooperative matrix, float8... (only when asked for)
     if (!h->shaderInt64) LOG("[vk] warning: no shaderInt64 (64-bit address math in shaders)\n");
 #ifdef VK_EXT_depth_bias_control
     VkPhysicalDeviceDepthBiasControlFeaturesEXT bias = {

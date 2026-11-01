@@ -31,7 +31,6 @@ int main(int argc, char **argv) {
     fputs("; Keep this comment\r\n[Display]\r\nMode = Borderless Window\r\nResolution = Desktop\r\nRenderResolution = Auto\r\n"
           "AspectRatio = 21:9\r\nFOV = 1.1 ; camera comment\r\n"
           "[Performance]\r\nFPS = 60\r\nFrameRate = 60\r\n[Monster HP]\r\nQuest101 = 0.6\r\nQuest102 = 1, 2, 3, 4\r\n"
-          "[Upscaler]\r\nUpscaler = FSR4\r\n"  // (from when FSR 4 existed: ignored, and kept like any unknown line)
           "[Future section]\r\nFutureOption = preserve-me", f);
     fclose(f);
     set_env("MHGU_CONFIG", path);
@@ -207,7 +206,7 @@ int main(int argc, char **argv) {
         config_set_aa_choice(&x,AA_CHOICES);assert(x.aa==AA_CMAA2);  // (out of range)
         config_set_aa_choice(&x,AA_CHOICE_GAME);assert(x.fxaa && x.fxaa_mode==FXAA_ORIGINAL && x.aa==AA_FXAA);
     }
-    fsr_config.fsr=1;fsr_config.fsr_quality=FSR_BALANCED;
+    fsr_config.fsr=1;fsr_config.fsr_upscaler=FSR_UP_4;fsr_config.fsr_quality=FSR_BALANCED;
     fsr_config.fsr_sharpness=.65f;fsr_config.fsr_objmotion=0;fsr_config.fsr_reactive=.35f;fsr_config.fsr_animsurf=0;
     fsr_config.msaa=8;fsr_config.fxaa=1;
     assert(config_save(&fsr_config,error,sizeof error));assert(config_restart_required(&fsr_config));
@@ -215,7 +214,7 @@ int main(int argc, char **argv) {
     assert(strstr(text, "Sharpness = 0.65\r\n") && strstr(text, "Reactive = 0.35\r\n") && strstr(text, "Upscaler = FSR4\r\n"));
     free(text);
     g_config=initial;config_load();Config fsr_saved=config_editable();
-    assert(fsr_saved.fsr && fsr_saved.fsr_quality==FSR_BALANCED);
+    assert(fsr_saved.fsr && fsr_saved.fsr_upscaler==FSR_UP_4 && fsr_saved.fsr_quality==FSR_BALANCED);
     assert(fabsf(fsr_saved.fsr_sharpness-.65f)<.001f && fabsf(fsr_saved.fsr_reactive-.35f)<.001f);
     assert(!fsr_saved.fsr_objmotion && !fsr_saved.fsr_animsurf);
     assert(config_live_msaa()==1 && config_live_fxaa()==0);
@@ -228,6 +227,7 @@ int main(int argc, char **argv) {
     assert(fabsf(config_live_fsr_sharpness()-.2f)<.001f && fabsf(config_live_fsr_reactive()-.5f)<.001f);
     assert(!config_restart_key("Sharpness") && !config_restart_key("Reactive"));
     bad=fsr_saved;bad.fsr_quality=5;assert(!config_save(&bad,error,sizeof error));
+    bad=fsr_saved;bad.fsr_upscaler=2;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_sharpness=NAN;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_reactive=1.1f;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_objmotion=2;assert(!config_save(&bad,error,sizeof error));

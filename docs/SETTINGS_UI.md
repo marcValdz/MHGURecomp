@@ -136,12 +136,12 @@ cover the game itself.
 
 ## FSR settings
 
- Graphics & Audio exposes all six
-[Upscaler] fields: FSR, quality, sharpness, object motion, reactive mask and
-animated surfaces. They persist without removing INI comments/aliases,
-participate in draft equality, dirty guards and section reset.
+ Graphics & Audio exposes all seven
+[Upscaler] fields: FSR, provider (FSR 3.1 / FSR 4), quality, sharpness, object
+motion, reactive mask and animated surfaces. They persist without removing INI
+comments/aliases, participate in draft equality, dirty guards and section reset.
 Sharpness and reactive mask apply at Save (each FSR frame reads them, fsr.c run_fsr); the others are marked
-restart-only.
+restart-only. FSR 4 retains upstream's provider/fallback rules; selecting it does not install a driver or loader.
 
 Active FSR keeps live MSAA at 1 and FXAA off, including after saving other
 settings or staging FSR Off for the next boot. The editor shows the AA rows as disabled "Off (FSR)" while FSR owns them,
