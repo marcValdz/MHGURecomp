@@ -24,7 +24,7 @@ static SDL_AtomicInt window_focused = {1};
 // [Display]
 static SDL_AtomicInt live_fov;
 static SDL_AtomicInt live_disp_mode, live_disp_w, live_disp_h;
-static SDL_AtomicInt live_rs_w, live_rs_h, live_out_w, live_out_h, live_aspect;
+static SDL_AtomicInt live_rs_w, live_rs_h, live_out_w, live_out_h, live_aspect, live_ui_anchor = {UI_CENTER};
 // [Anti-aliasing]
 static SDL_AtomicInt live_msaa = {1};
 static SDL_AtomicInt live_fxaa = {1};
@@ -152,6 +152,7 @@ static void publish_live(const Config *c, bool all) {
     if (all || c->fsr_animsurf != saved.fsr_animsurf) SDL_SetAtomicInt(&live_fsr_animsurf, c->fsr_animsurf);
     if (all || c->fsr_upscaler != saved.fsr_upscaler) SDL_SetAtomicInt(&live_fsr_upscaler, c->fsr_upscaler);
     if (all || c->fsr != saved.fsr) SDL_SetAtomicInt(&live_fsr, c->fsr);
+    if (all || c->ui_anchor != saved.ui_anchor) SDL_SetAtomicInt(&live_ui_anchor, c->ui_anchor);
     if (all || sizes_differ(c, &saved)) {
         int render[2], out[2];
         float aspect;
@@ -252,6 +253,7 @@ int config_live_msaa(void) {  // (SMAA S2x / 4x: MSAA 2x whatever MSAA says)
     return SDL_GetAtomicInt(&fsr_running) ? 1 : AA_USES_S2X(SDL_GetAtomicInt(&live_aa)) ? 2 : SDL_GetAtomicInt(&live_msaa);
 }
 int config_live_fsr(void) { return SDL_GetAtomicInt(&live_fsr); }
+int config_live_ui_anchor(void) { return SDL_GetAtomicInt(&live_ui_anchor); }
 void config_live_sizes(int render[2], int out[2], float *aspect) {
     render[0] = SDL_GetAtomicInt(&live_rs_w), render[1] = SDL_GetAtomicInt(&live_rs_h);
     out[0] = SDL_GetAtomicInt(&live_out_w), out[1] = SDL_GetAtomicInt(&live_out_h);

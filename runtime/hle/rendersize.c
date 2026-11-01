@@ -20,7 +20,7 @@
 // Hooked at f_dbe154's entry (the guest's frame, before the switch it makes) only while a size other than the start-up
 // one is wanted or drawn at, and only once the render system was checked against these offsets (check); after it, g_render_size and
 // g_render_aspect follow the size the game draws at (the renderer's checks, the cameras, fsr.c), g_ui_anchor_aspect
-// UIAnchor (as at start-up) on that picture (exec.c, per HUD draw).
+// UIAnchor on that picture (exec.c, per HUD draw).
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -269,6 +269,16 @@ static void before(uint32_t S) {
     post(S, (int)other);
 }
 
+// The HUD's width (exec.c): UIAnchor as saved now on the picture drawn now. After the game's step while hooked, and
+// each present (rendersize_follow), so UIAnchor alone needs no hook.
+static void hud_follow(void) {
+    float ui = config_ui_aspect(config_live_ui_anchor(), g_render_aspect);
+    if (ui != g_ui_anchor_aspect) {
+        LOG("[live] HUD width %.3f -> %.3f\n", g_ui_anchor_aspect, ui);
+        g_ui_anchor_aspect = ui;
+    }
+}
+
 // After the game's step: the renderer and the cameras follow the size it draws at now, the HUD (exec.c) the width
 // UIAnchor gives it on that picture.
 static void after(uint32_t S) {
@@ -283,11 +293,7 @@ static void after(uint32_t S) {
         switched_at = g_present_count;
         window_follow((int)w, (int)h);
     }
-    float ui = config_ui_aspect(g_config.ui_anchor, g_render_aspect);
-    if (ui != g_ui_anchor_aspect) {
-        LOG("[live] HUD width %.3f -> %.3f\n", g_ui_anchor_aspect, ui);
-        g_ui_anchor_aspect = ui;
-    }
+    hud_follow();
 }
 
 // The hook is set only while a size other than the start-up one is wanted or still drawn at (rendersize_follow), so
@@ -348,6 +354,7 @@ void rendersize_init(void) {
 }
 
 void rendersize_follow(void) {
+    hud_follow();
     if (off || hooked) return;
     int rs[2], out[2];
     float aspect;

@@ -159,9 +159,10 @@ extern Config g_config;
 extern uint32_t g_render_size[2];  // read by the game code (tools/gen.py PATCHES: its docked render size)
 extern float g_render_aspect;      // the picture's shape, 16:10 or wider: the 3D cameras' aspect (tools/gen.py PATCHES)
 extern float g_fov_scale;          // boot diagnostic value; camera_fovy reads config_live_fov()
-extern uint32_t g_ui_size[2];      // the game's 2D canvas size (tools/gen.py PATCHES: 0xdbcd48, 0xdbcd54)
-extern float g_ui_anchor_aspect;   // the HUD's width / height, 16:9 .. g_render_aspect (nvn/vulkan/exec.c; follows the
-                                   // picture's shape live: hle/rendersize.c)
+extern uint32_t g_ui_size[2];      // the game's handheld size, 720 high and as wide as the HUD at start-up (tools/gen.py
+                                   // PATCHES: 0xdbcd48, 0xdbcd54; not the HUD's canvas: hle/rendersize.c)
+extern float g_ui_anchor_aspect;   // the HUD's width / height, 16:9 .. g_render_aspect (nvn/vulkan/exec.c; follows UIAnchor
+                                   // live: hle/rendersize.c)
 extern uint32_t g_fsr_output[2];   // FSR on at start-up: the size it upscales to (what g_render_size would be without
                                    // it), else 0 (FSR turned on later upscales to g_render_size: fsr.c vk_fsr_init)
 extern float g_fsr_lod_bias;       // FSR on at start-up: texture LOD bias for the lower render size, log2(render / output);
@@ -233,6 +234,7 @@ void config_sizes_live(bool on);   // (hle/rendersize.c) false: RenderResolution
 bool config_sizes_are_live(void);
 void config_fsr_running(bool on);  // (fsr.c) FSR is on / off now: MSAA and FXAA give way to it while it is on
 void config_live_sizes(int render[2], int out[2], float *aspect);  // as saved now (config_sizes; hle/rendersize.c)
+int config_live_ui_anchor(void);  // UI_* (hle/rendersize.c: g_ui_anchor_aspect)
 int config_live_vsync(void);
 int config_live_face_buttons(void);
 int config_live_menu_confirm(void);

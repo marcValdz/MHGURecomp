@@ -714,7 +714,7 @@ const ConfigSetting g_settings[] = {
     {"Display", "RenderResolution", SET_SIZE, F(render_w), F(render_h), 0, 0, "Auto", NULL, false, ERR_SIZE},
     {"Display", "AspectRatio", SET_ASPECT, F(aspect_ratio), 0, 0.5f, 10.0f, NULL, NULL, false, ERR_ASPECT},
     {"Display", "FOV", SET_FLOAT, F(fov), 0, 0.5f, 2.0f, NULL, NULL, false, ERR_VIEW},
-    {"Display", "UIAnchor", SET_CHOICE, F(ui_anchor), 0, 0, 0, "Center|1|16:9,21:9|2,32:9|3,Edges", anchor_values, true,
+    {"Display", "UIAnchor", SET_CHOICE, F(ui_anchor), 0, 0, 0, "Center|1|16:9,21:9|2,32:9|3,Edges", anchor_values, false,
      ERR_MISC},
     {"Anti-aliasing", "MSAA", SET_CHOICE, F(msaa), 0, 0, 0, "Off|none|0|1|1x,2x|2,4x|4,8x|8", msaa_values, false, ERR_MISC},
     ON_OFF("Anti-aliasing", "FXAA", fxaa, false),
@@ -1178,7 +1178,7 @@ static void fit_aspect(int w, int h, float aspect, int *rw, int *rh) {
 }
 
 // The HUD's width for UIAnchor on a picture of that shape: 16:9 (Center), 21:9, 32:9 or the picture's (Edges), at most
-// the picture's; exec.c places the HUD's parts in it (g_ui_anchor_aspect, on the picture drawn now: hle/rendersize.c).
+// the picture's; exec.c places the HUD's parts in it (g_ui_anchor_aspect, followed live: hle/rendersize.c).
 float config_ui_aspect(int anchor, float aspect) {
     float ui = anchor == UI_EDGES  ? aspect
              : anchor == UI_32_9 ? 32.0f / 9.0f

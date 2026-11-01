@@ -153,9 +153,10 @@ int main(int argc, char **argv) {
     assert(!config_restart_key("FOV"));
     assert(!config_restart_key("MSAA") && !config_restart_key("VSync") && !config_restart_key("FaceButtons"));
     // The size rows are live, a larger 3D picture than at start-up too (hle/rendersize.c)
-    const char *const sizes[] = {"Mode", "Resolution", "RenderResolution", "AspectRatio", "FSR", "FSRQuality"};
+    const char *const sizes[] = {"Mode", "Resolution", "RenderResolution", "AspectRatio", "UIAnchor", "FSR", "FSRQuality"};
     for (size_t i = 0; i < sizeof sizes / sizeof *sizes; i++) assert(!config_restart_key(sizes[i]));
     Config d = loaded;
+    d.ui_anchor = loaded.ui_anchor == UI_EDGES ? UI_CENTER : UI_EDGES;
     d.render_w = 3840; d.render_h = 1646;  // (larger than the start-up 1920x822)
     d.fsr = 1; d.fsr_quality = FSR_NATIVE;
     assert(!config_restart_required(&d));
