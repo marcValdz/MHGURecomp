@@ -22,6 +22,7 @@
 #include "fsr.h"
 #include "hdr.h"
 #include "fsr4.h"
+#include "../../hle/rendersize.h"
 #include "vk.h"
 
 VkG g_vk;
@@ -905,7 +906,7 @@ void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h) 
 }
 
 // ================================================================== presentation (nvnQueuePresentTexture)
-void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh);  // (exec.c)
+void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh, float cu, float cv);  // (exec.c)
 
 static uint64_t g_frames;
 uint64_t vk_frame_counter(void) { return g_frames; }
@@ -926,17 +927,35 @@ void backend_present(NvnTexture *t) {
     vi_apply_framerate();
     vk_lock();
     if (vk_hdr_tracking()) vk_hdr_present(t);  // (HDR: learns the frame's full-screen image, hdr.c)
+    NvnTexture *game = t;
     t = vk_fsr_present(t);  // FSR: its output-size picture with the HUD; SMAA S2x / T2x start and stop here (fsr.c)
     TexBackend *b = vk_tex(t, true);
     b->presented = true;
     vk_end_pass();
     vk_ms_resolve(b);
     if (g_hdr_out) vk_hdr_analyze(vk_cmd(), b);  // ([HDR] Analysis: measured before it is drawn, hdr.c)
-    if (frame_begin()) {
-        // the game's image, as large as fits with its aspect ratio, centred
-        double ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height, s = fmin(ww / t->width, wh / t->height);
-        double vw = t->width * s, vh = t->height * s;
-        vk_present_draw(vk_cmd(), b, (float)((ww - vw) / 2), (float)((wh - vh) / 2), (float)vw, (float)vh);
+    // (hle/rendersize.c) in the frames of a size switch the game presents a window texture it did not draw into (with
+    // FSR its picture is in FSR's stand-in, freed as FSR is made again): not shown, the window keeps the last picture
+    bool undrawn = rendersize_switching() && rendersize_window(game) && !vk_drawn_now(game);
+    if (!undrawn && frame_begin()) {
+        // the game's image, as large as fits with its aspect ratio, centred; of a smaller 3D picture drawn into the
+        // start-up size's image (hle/rendersize.c) only the part drawn
+        float cu = 1.0f, cv = 1.0f;
+        if (t == game) vk_drawn_part(t, &cu, &cv);
+        {   // (debug, MHGU_PRESENT_LOG) each change of the texture shown or the part of it
+            static int on = -1;
+            static NvnTexture *last;
+            static float lcu, lcv;
+            if (on < 0) on = getenv("MHGU_PRESENT_LOG") != NULL;
+            if (on && (t != last || cu != lcu || cv != lcv))
+                LOG("[present] frame %llu: %p %ux%u (format %#x)%s, part %.3f x %.3f\n", (unsigned long long)g_frames + 1,
+                    (void *)t, t->width, t->height, t->format, t == game ? "" : " (FSR stand-in)", cu, cv);
+            last = t, lcu = cu, lcv = cv;
+        }
+        double tw = t->width * cu, th = t->height * cv;
+        double ww = g_vk.sc_extent.width, wh = g_vk.sc_extent.height, s = fmin(ww / tw, wh / th);
+        double vw = tw * s, vh = th * s;
+        vk_present_draw(vk_cmd(), b, (float)((ww - vw) / 2), (float)((wh - vh) / 2), (float)vw, (float)vh, cu, cv);
         OverlayTarget ot = {g_vk.inst, g_vk.phys, g_vk.dev, g_vk.qfam, g_vk.queue, g_vk.pcache, sc_pass,
                             g_vk.sc_extent.width, g_vk.sc_extent.height};
         overlay_draw(vk_cmd(), &ot);  // (Forge plugins' ImGui overlay, over the game: runtime/overlay.cpp)
@@ -963,6 +982,7 @@ void backend_present(NvnTexture *t) {
     // [Upscaler] FSR as saved now, from the next frame on (fsr.c; after this frame's present, which may show its
     // stand-in), and MSAA with it (off while FSR is on, back when it is turned off)
     vk_fsr_follow();
+    rendersize_follow();  // (a size other than the start-up one wanted: the render system's step hooked)
     msaa_follow();
     {   // (debug) MHGU_CONTROL "dump": the next whole frame's passes (exec.c dump_pass)
         extern volatile int g_dump_active, g_dump_request;

@@ -1175,6 +1175,9 @@ std::vector<Row> main_rows() {
             {tr("Auto"), tr("Custom")}, [](int v) { s.draft.aspect_ratio = v ? 16.f / 9 : 0; }, ini("AspectRatio"));
         if (c.aspect_ratio)
             number(r, "aspect", tr("Aspect ratio"), &c.aspect_ratio, lo("AspectRatio"), hi("AspectRatio"), .05f, ini("AspectRatio"));
+        if (!config_sizes_are_live())  // (the game's render system did not look as expected: hle/rendersize.c)
+            for (auto &row : r)
+                if (row.id.rfind("render.", 0) == 0 || row.id.rfind("aspect", 0) == 0) row.cold = true;
         number(r, "fov", tr("Field of view"), &c.fov, lo("FOV"), hi("FOV"), .05f, ini("FOV"));
         add_choice(
             r, "anchor", "HUD anchor", c.ui_anchor - 1, {"16:9", "21:9", "32:9", tr("Edges")},
@@ -1258,6 +1261,7 @@ std::vector<Row> main_rows() {
                 r, "fsr.quality", "FSR quality", c.fsr_quality,
                 {tr("Native AA"), tr("Quality"), tr("Balanced"), tr("Performance"), tr("Ultra performance")},
                 [](int v) { s.draft.fsr_quality = v; }, ini("FSRQuality"));
+            if (!config_sizes_are_live()) r.back().cold = true;
             number(r, "fsr.sharpness", tr("Sharpness"), &c.fsr_sharpness, lo("Sharpness"), hi("Sharpness"), .05f, ini("Sharpness"));
             add_bool(r, "fsr.motion", "Object motion", &c.fsr_objmotion, ini("ObjectMotion"));
             number(r, "fsr.reactive", tr("Reactive mask"), &c.fsr_reactive, lo("Reactive"), hi("Reactive"), .05f, ini("Reactive"));

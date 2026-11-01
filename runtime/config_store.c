@@ -19,10 +19,12 @@
 static Config saved, startup;
 static bool have_saved, runtime_ready, runtime_fsr4;  // (runtime_fsr4: the device was made for FSR 4)
 static SDL_AtomicInt fsr_running;  // the renderer's FSR is on now (nvn/vulkan/fsr.c config_fsr_running): MSAA / FXAA off
+static SDL_AtomicInt sizes_off;    // the render size can only change at a restart (hle/rendersize.c config_sizes_live)
 static SDL_AtomicInt window_focused = {1};
 // [Display]
 static SDL_AtomicInt live_fov;
 static SDL_AtomicInt live_disp_mode, live_disp_w, live_disp_h;
+static SDL_AtomicInt live_rs_w, live_rs_h, live_out_w, live_out_h, live_aspect;
 // [Anti-aliasing]
 static SDL_AtomicInt live_msaa = {1};
 static SDL_AtomicInt live_fxaa = {1};
@@ -79,6 +81,13 @@ static SDL_AtomicInt mute_in_background;
 // [Application]
 static SDL_AtomicInt confirm_exit = {1};
 static SDL_AtomicInt language = {0};
+// [Display] / [Upscaler] rows that change the 3D picture's size: its size, the size it is shown at, its shape
+// (config.c config_sizes), followed by the game's render system while it runs (hle/rendersize.c)
+static bool sizes_differ(const Config *a, const Config *b) {
+    return a->display_mode != b->display_mode || a->width != b->width || a->height != b->height ||
+           a->render_w != b->render_w || a->render_h != b->render_h || a->aspect_ratio != b->aspect_ratio ||
+           a->fsr != b->fsr || a->fsr_quality != b->fsr_quality;
+}
 static void set_float(SDL_AtomicInt *slot, float value) {
     int bits; _Static_assert(sizeof bits == sizeof value, "32-bit float settings");
     memcpy(&bits, &value, sizeof bits); SDL_SetAtomicInt(slot, bits);
@@ -143,6 +152,14 @@ static void publish_live(const Config *c, bool all) {
     if (all || c->fsr_animsurf != saved.fsr_animsurf) SDL_SetAtomicInt(&live_fsr_animsurf, c->fsr_animsurf);
     if (all || c->fsr_upscaler != saved.fsr_upscaler) SDL_SetAtomicInt(&live_fsr_upscaler, c->fsr_upscaler);
     if (all || c->fsr != saved.fsr) SDL_SetAtomicInt(&live_fsr, c->fsr);
+    if (all || sizes_differ(c, &saved)) {
+        int render[2], out[2];
+        float aspect;
+        config_sizes(c, render, out, &aspect);
+        SDL_SetAtomicInt(&live_rs_w, render[0]), SDL_SetAtomicInt(&live_rs_h, render[1]);
+        SDL_SetAtomicInt(&live_out_w, out[0]), SDL_SetAtomicInt(&live_out_h, out[1]);
+        set_float(&live_aspect, aspect);
+    }
     for (int i = 0; i < BINDS; i++)
         for (int k = 0; k < BIND_KEYS; k++)
             if (all || c->binds[i][k] != saved.binds[i][k]) SDL_SetAtomicInt(&live_binds[i][k], c->binds[i][k]);
@@ -212,6 +229,11 @@ void config_runtime_init(const Config *effective) {
     startup = saved; runtime_ready = true; SDL_SetAtomicInt(&fsr_running, effective->fsr != 0);
     runtime_fsr4 = effective->fsr && effective->fsr_upscaler >= FSR_UP_4;
     publish_live(effective, true);
+    // (the sizes the game starts with: effective has the resolved render size in render_w / render_h, config_load)
+    SDL_SetAtomicInt(&live_rs_w, (int)g_render_size[0]), SDL_SetAtomicInt(&live_rs_h, (int)g_render_size[1]);
+    SDL_SetAtomicInt(&live_out_w, (int)(g_fsr_output[0] ? g_fsr_output[0] : g_render_size[0]));
+    SDL_SetAtomicInt(&live_out_h, (int)(g_fsr_output[0] ? g_fsr_output[1] : g_render_size[1]));
+    set_float(&live_aspect, g_render_aspect);
     const char *override = getenv("MHGU_FRAMERATE");
     if (override && *override) {
         float f = strtof(override, NULL);
@@ -230,7 +252,14 @@ int config_live_msaa(void) {  // (SMAA S2x / 4x: MSAA 2x whatever MSAA says)
     return SDL_GetAtomicInt(&fsr_running) ? 1 : AA_USES_S2X(SDL_GetAtomicInt(&live_aa)) ? 2 : SDL_GetAtomicInt(&live_msaa);
 }
 int config_live_fsr(void) { return SDL_GetAtomicInt(&live_fsr); }
+void config_live_sizes(int render[2], int out[2], float *aspect) {
+    render[0] = SDL_GetAtomicInt(&live_rs_w), render[1] = SDL_GetAtomicInt(&live_rs_h);
+    out[0] = SDL_GetAtomicInt(&live_out_w), out[1] = SDL_GetAtomicInt(&live_out_h);
+    *aspect = get_float(&live_aspect);
+}
 void config_fsr_running(bool on) { SDL_SetAtomicInt(&fsr_running, on); }
+void config_sizes_live(bool on) { SDL_SetAtomicInt(&sizes_off, !on); }
+bool config_sizes_are_live(void) { return !SDL_GetAtomicInt(&sizes_off); }
 int config_live_vsync(void) { return SDL_GetAtomicInt(&live_vsync); }
 int config_live_menu_confirm(void) { return SDL_GetAtomicInt(&live_menu_confirm); }
 int config_live_face_buttons(void) { return SDL_GetAtomicInt(&live_face); }
@@ -329,6 +358,9 @@ bool config_fsr4_needs_restart(const Config *c) { return runtime_ready && !runti
 bool config_restart_required(const Config *c) {
     if (!runtime_ready) return false;
     if (config_fsr4_needs_restart(c)) return true;
+    if (SDL_GetAtomicInt(&sizes_off) && (c->render_w != startup.render_w || c->render_h != startup.render_h ||
+                                         c->aspect_ratio != startup.aspect_ratio || c->fsr_quality != startup.fsr_quality))
+        return true;
     for (int i = 0; i < g_nsettings; i++) {
         const ConfigSetting *s = &g_settings[i];
         if (s->restart && (!config_valid(s, c) || !config_equal(s, c, &startup))) return true;

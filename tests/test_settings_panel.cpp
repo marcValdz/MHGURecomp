@@ -649,7 +649,7 @@ int main() {
     assert(config_editable().fsr == 1 && config_editable().fsr_upscaler == FSR_UP_4);
     assert(config_editable().fsr_quality == FSR_QUALITY);
     Config fsr_saved = config_editable();
-    assert(config_restart_required(&fsr_saved));
+    assert(config_restart_required(&fsr_saved) && config_fsr4_needs_restart(&fsr_saved));  // (FSR and its quality are live; FSR 4 needs the game started with it)
     opened = false;
     frame();
     g_config.fsr = 1;

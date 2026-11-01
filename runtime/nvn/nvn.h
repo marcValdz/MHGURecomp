@@ -111,6 +111,7 @@ typedef struct NvnWindow {
     int num, active, interval, next;
     int crop[4];
 } NvnWindow;
+extern NvnWindow *g_nvn_window;  // the last one made: the game's (its textures resized by runtime/hle/rendersize.c)
 
 typedef struct NvnSync {
     volatile int signaled;

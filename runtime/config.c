@@ -711,8 +711,8 @@ const ConfigSetting g_settings[] = {
     {"Display", "Mode", SET_CHOICE, F(display_mode), 0, 0, 0,
      "Windowed|window,Fullscreen|exclusive|exclusivefullscreen,Borderless|borderless*", NULL, false, ERR_SIZE},
     {"Display", "Resolution", SET_SIZE, F(width), F(height), 0, 0, "Desktop|auto", NULL, false, ERR_SIZE},
-    {"Display", "RenderResolution", SET_SIZE, F(render_w), F(render_h), 0, 0, "Auto", NULL, true, ERR_SIZE},
-    {"Display", "AspectRatio", SET_ASPECT, F(aspect_ratio), 0, 0.5f, 10.0f, NULL, NULL, true, ERR_ASPECT},
+    {"Display", "RenderResolution", SET_SIZE, F(render_w), F(render_h), 0, 0, "Auto", NULL, false, ERR_SIZE},
+    {"Display", "AspectRatio", SET_ASPECT, F(aspect_ratio), 0, 0.5f, 10.0f, NULL, NULL, false, ERR_ASPECT},
     {"Display", "FOV", SET_FLOAT, F(fov), 0, 0.5f, 2.0f, NULL, NULL, false, ERR_VIEW},
     {"Display", "UIAnchor", SET_CHOICE, F(ui_anchor), 0, 0, 0, "Center|1|16:9,21:9|2,32:9|3,Edges", anchor_values, true,
      ERR_MISC},
@@ -724,7 +724,7 @@ const ConfigSetting g_settings[] = {
     {"Upscaler", "FSR", SET_BOOL, F(fsr), 0, 0, 0, NULL, NULL, false, ERR_TOGGLE},
     {"Upscaler", "Upscaler", SET_CHOICE, F(fsr_upscaler), 0, 0, 0, "FSR3|fsr3.1|3,FSR4|4,FSR4Lite|4lite", NULL, false, ERR_FSR},
     {"Upscaler", "FSRQuality", SET_CHOICE, F(fsr_quality), 0, 0, 0,
-     "NativeAA|native|aa,Quality,Balanced,Performance,UltraPerformance|ultraperf", NULL, true, ERR_FSR},
+     "NativeAA|native|aa,Quality,Balanced,Performance,UltraPerformance|ultraperf", NULL, false, ERR_FSR},
     {"Upscaler", "Sharpness", SET_FLOAT, F(fsr_sharpness), 0, 0.0f, 1.0f, NULL, NULL, false, ERR_FSR},
     ON_OFF("Upscaler", "ObjectMotion", fsr_objmotion, false),
     {"Upscaler", "Reactive", SET_FLOAT, F(fsr_reactive), 0, 0.0f, 1.0f, NULL, NULL, false, ERR_FSR},
@@ -1177,6 +1177,72 @@ static void fit_aspect(int w, int h, float aspect, int *rw, int *rh) {
     *rw = w & ~1, *rh = h & ~1;
 }
 
+// The HUD's width for UIAnchor on a picture of that shape: 16:9 (Center), 21:9, 32:9 or the picture's (Edges), at most
+// the picture's; exec.c places the HUD's parts in it (g_ui_anchor_aspect, on the picture drawn now: hle/rendersize.c).
+float config_ui_aspect(int anchor, float aspect) {
+    float ui = anchor == UI_EDGES  ? aspect
+             : anchor == UI_32_9 ? 32.0f / 9.0f
+             : anchor == UI_21_9 ? 21.0f / 9.0f
+                                 : 16.0f / 9.0f;
+    return ui < aspect ? ui : aspect;
+}
+
+// The sizes the settings make, for config_load and config_sizes: the 3D picture's size (render) and shape, the size
+// FSR upscales to (out; without FSR the same as render), the HUD's width.
+// c: Resolution 0x0 is the desktop's; render_auto: RenderResolution Auto; quiet: no log lines.
+typedef struct { int render[2], out[2]; float aspect, ui_aspect; uint32_t ui[2]; } Sizes;
+static void sizes_of(const Config *c, bool render_auto, bool quiet, Sizes *z) {
+    int tw = c->width ? c->width : desktop_w, th = c->width ? c->height : desktop_h, w, h;
+    if (c->display_mode == DISPLAY_BORDERLESS) tw = tw < desktop_w ? tw : desktop_w, th = th < desktop_h ? th : desktop_h;
+    if (tw <= 0 || th <= 0) tw = 1920, th = 1080;  // (no desktop known: before config_load, tests)
+    // The picture's shape: the window's or AspectRatio's, at least 16:10. The game lays its HUD out for 16:9, which
+    // still fits down to 16:10 (a little flatter, nvn/vulkan/exec.c), so a narrower window (4:3) shows 16:10 with bars.
+    // Wider than 16:9 shows more to the sides, 16:9 to 16:10 more above and below (camera_fovy, gen.py PATCHES).
+    float aspect = c->aspect_ratio > 0 ? c->aspect_ratio : (float)tw / (float)th;
+    if (aspect < 1.6f - 0.005f) {
+        if (c->aspect_ratio > 0 && !quiet)
+            LOG("[config] AspectRatio %.3f is narrower than 16:10, which the HUD needs: using 16:10\n", aspect);
+        aspect = 1.6f;
+    }
+    if (fabsf(aspect - 16.0f / 9.0f) < 0.01f) aspect = 16.0f / 9.0f;  // (1366x768 and the like)
+    if (render_auto && c->fsr && c->display_mode == DISPLAY_BORDERLESS && (tw < desktop_w || th < desktop_h)) {
+        // FSR, Borderless: it upscales straight to the size the picture is shown at (the screen, in the picture's shape)
+        // instead of to Resolution, which the window would then stretch again (blurring what FSR rebuilt)
+        fit_aspect(desktop_w, desktop_h, aspect, &w, &h);
+        if (!quiet)
+            LOG("[config] FSR, Borderless: upscaling to %dx%d (the screen, in the picture's shape) instead of Resolution "
+                "%dx%d\n", w, h, tw, th);
+    } else if (render_auto) {
+        fit_aspect(tw, th, aspect, &w, &h);
+    } else {
+        fit_aspect(c->render_w, c->render_h, aspect, &w, &h);
+        if ((w != c->render_w || h != c->render_h) && !quiet)
+            LOG("[config] RenderResolution %dx%d is not the picture's shape (%.3f): using %dx%d\n", c->render_w,
+                c->render_h, aspect, w, h);
+    }
+    z->out[0] = w, z->out[1] = h;
+    // FSR: that size is its output; the game renders smaller. Native AA renders at that very size (fitted again, 1920x822
+    // at 2.333 would become 1918x822), so turning FSR on or off there keeps the render size.
+    if (c->fsr && c->fsr_quality > FSR_NATIVE) {
+        static const float ratio[] = {1.0f, 1.5f, 1.7f, 2.0f, 3.0f};
+        float r = ratio[c->fsr_quality <= FSR_ULTRA_PERFORMANCE ? c->fsr_quality : 0];
+        fit_aspect((int)(w / r + 0.5f), (int)(h / r + 0.5f), aspect, &w, &h);
+    }
+    z->render[0] = w, z->render[1] = h, z->aspect = aspect;
+    // The HUD's width (config_ui_aspect); the game's handheld size gets it too (gen.py PATCHES: f_dbca50's 1280x720)
+    z->ui_aspect = config_ui_aspect(c->ui_anchor, aspect);
+    z->ui[1] = 720;
+    z->ui[0] = (uint32_t)(720.0f * z->ui_aspect + 0.5f) & ~1u;
+    if (z->ui[0] < 1280) z->ui[0] = 1280;
+}
+
+// (the sizes as saved, followed while the game runs: config_store.c, hle/rendersize.c)
+void config_sizes(const Config *c, int render[2], int out[2], float *aspect) {
+    Sizes z;
+    sizes_of(c, !c->render_w, true, &z);
+    render[0] = z.render[0], render[1] = z.render[1], out[0] = z.out[0], out[1] = z.out[1], *aspect = z.aspect;
+}
+
 // Sections of DEFAULT_INI the file lacks (written by an older build) are added with their defaults at its end; the
 // player's own settings stay as they are.
 static void append_missing_sections(const char *path, const char *seen) {
@@ -1282,40 +1348,15 @@ void config_load(void) {
         g_config.fsr = 0;
     }
 
-    int tw = g_config.width, th = g_config.height;  // (Borderless shows the image at the desktop size)
-    if (g_config.display_mode == DISPLAY_BORDERLESS) tw = tw < desktop_w ? tw : desktop_w, th = th < desktop_h ? th : desktop_h;
-    // The picture's shape: the window's or AspectRatio's, at least 16:10. The game lays its HUD out for 16:9, which
-    // still fits down to 16:10 (a little flatter, nvn/vulkan/exec.c), so a narrower window (4:3) shows 16:10 with bars.
-    // Wider than 16:9 shows more to the sides, 16:9 to 16:10 more above and below (camera_fovy, gen.py PATCHES).
-    float aspect = g_config.aspect_ratio > 0 ? g_config.aspect_ratio : (float)tw / (float)th;
-    if (aspect < 1.6f - 0.005f) {
-        if (g_config.aspect_ratio > 0)
-            LOG("[config] AspectRatio %.3f is narrower than 16:10, which the HUD needs: using 16:10\n", aspect);
-        aspect = 1.6f;
-    }
-    if (fabsf(aspect - 16.0f / 9.0f) < 0.01f) aspect = 16.0f / 9.0f;  // (1366x768 and the like)
-    if (render_auto && g_config.fsr && g_config.display_mode == DISPLAY_BORDERLESS && (tw < desktop_w || th < desktop_h)) {
-        // FSR, Borderless: it upscales straight to the size the picture is shown at (the screen, in the picture's shape)
-        // instead of to Resolution, which the window would then stretch again (blurring what FSR rebuilt)
-        fit_aspect(desktop_w, desktop_h, aspect, &w, &h);
-        LOG("[config] FSR, Borderless: upscaling to %dx%d (the screen, in the picture's shape) instead of Resolution %dx%d\n",
-            w, h, tw, th);
-    } else if (render_auto) {
-        fit_aspect(tw, th, aspect, &w, &h);
-    } else {
-        fit_aspect(g_config.render_w, g_config.render_h, aspect, &w, &h);
-        if (w != g_config.render_w || h != g_config.render_h)
-            LOG("[config] RenderResolution %dx%d is not the picture's shape (%.3f): using %dx%d\n", g_config.render_w,
-                g_config.render_h, aspect, w, h);
-    }
-    if (g_config.fsr) {  // FSR: that size is its output; the game renders smaller (runtime/nvn/vulkan/fsr.c)
+    Sizes z;
+    sizes_of(&g_config, render_auto, false, &z);
+    float aspect = z.aspect;
+    w = z.render[0], h = z.render[1];
+    if (g_config.fsr) {  // FSR: z.out is its output; the game renders smaller (runtime/nvn/vulkan/fsr.c)
         static const float ratio[] = {1.0f, 1.5f, 1.7f, 2.0f, 3.0f};
         static const char *const names[] = {"NativeAA", "Quality", "Balanced", "Performance", "UltraPerformance"};
-        g_fsr_output[0] = (uint32_t)w, g_fsr_output[1] = (uint32_t)h;
+        g_fsr_output[0] = (uint32_t)z.out[0], g_fsr_output[1] = (uint32_t)z.out[1];
         float r = ratio[g_config.fsr_quality];
-        // (Native AA renders at that very size: fitted again, 1920x822 at 2.333 would become 1918x822, so turning FSR
-        // on or off there would change the render size)
-        if (g_config.fsr_quality > FSR_NATIVE) fit_aspect((int)(w / r + 0.5f), (int)(h / r + 0.5f), aspect, &w, &h);
         if (g_config.msaa > 1) LOG("[config] FSR is on: MSAA off (FSR does the anti-aliasing)\n");
         if (g_config.fxaa) LOG("[config] FSR is on: FXAA off (FSR does the anti-aliasing)\n");
         // textures are sampled for the output size (AMD's recommendation: log2(render / output)); MHGU_FSR_LODBIAS
@@ -1332,16 +1373,8 @@ void config_load(void) {
     g_render_aspect = aspect;
     g_fov_scale = g_config.fov;
 
-    // The HUD's width: 16:9 (Center), 21:9, 32:9 or the picture's (Edges), at most the picture's; the game's 2D canvas
-    // gets that width (gen.py PATCHES), exec.c places the HUD's parts in it.
-    float ui = g_config.ui_anchor == UI_EDGES  ? aspect
-             : g_config.ui_anchor == UI_32_9 ? 32.0f / 9.0f
-             : g_config.ui_anchor == UI_21_9 ? 21.0f / 9.0f
-                                             : 16.0f / 9.0f;
-    g_ui_anchor_aspect = ui < aspect ? ui : aspect;
-    g_ui_size[1] = 720;
-    g_ui_size[0] = (uint32_t)(720.0f * g_ui_anchor_aspect + 0.5f) & ~1u;
-    if (g_ui_size[0] < 1280) g_ui_size[0] = 1280;
+    g_ui_anchor_aspect = z.ui_aspect;
+    g_ui_size[0] = z.ui[0], g_ui_size[1] = z.ui[1];
 
     config_runtime_init(&g_config);
     // FSR on: MSAA and FXAA off in the start-up copy; the live values keep the file's, which come back when FSR is

@@ -637,6 +637,7 @@ NVN(nvnWindowBuilderGetTexture) {  // (an array of 32-bit NVNtexture pointers)
 NVN(nvnWindowBuilderGetPresentInterval) { RET(G(uint32_t, A(0), 0x20)); }
 NVN(nvnWindowBuilderGetNumActiveTextures) { RET(G(uint32_t, A(0), 0x24)); }
 
+NvnWindow *g_nvn_window;
 NVN(nvnWindowInitialize) {
     NvnWindow *w = calloc(1, sizeof *w);
     w->num = (int)G(uint32_t, A(1), 0x10);
@@ -646,6 +647,7 @@ NVN(nvnWindowInitialize) {
     w->interval = (int)G(uint32_t, A(1), 0x20);
     w->active = G(uint32_t, A(1), 0x24) ? (int)G(uint32_t, A(1), 0x24) : w->num;
     SET_HOST(A(0), w);
+    g_nvn_window = w;
     LOG("[nvn] window with %d textures\n", w->num);
     RET(1);
 }

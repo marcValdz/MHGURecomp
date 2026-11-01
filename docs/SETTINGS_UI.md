@@ -78,8 +78,8 @@ counter's rank or star menu).
 Multiplayer's Port and Join (from the next hub hosted or searched for) and SyncSmallMonsters apply at Save too.
 BonusContent counts from the next time the game opens the save, and the cheats folder is read again each time the
 menu opens.
-So do the window's Mode and Resolution (the window changes at once; the 3D picture keeps its start-up size, scaled
-to the window, until the next start).
+So do the window's Mode and Resolution, RenderResolution and AspectRatio: the window and the 3D picture change size
+between two frames.
 Render changes are consumed at render boundaries. Language, symbols and interface scale preview
 immediately and persist on Save. Cold fields carry an asterisk; the saved status
 indicates a pending restart only when cold settings differ from startup values.
@@ -142,8 +142,8 @@ motion, reactive mask and animated surfaces. They persist without removing INI
 comments/aliases, participate in draft equality, dirty guards and section reset.
 Sharpness and reactive mask apply at Save (each FSR frame reads them, fsr.c run_fsr), object motion, animated
 surfaces and the upscaler at the next frame (fsr.c fsr_live_options makes or frees what they need), FSR on / off at
-the next frame too (fsr.c vk_fsr_follow, at the sizes of start-up); FSR quality is marked restart-only, and so is
-choosing FSR 4 when the game started without it (its Vulkan 1.3 device setup is only made then:
+the next frame too (fsr.c vk_fsr_follow), FSR quality with the render size (hle/rendersize.c); none of them is
+marked "*" but choosing FSR 4 when the game started without it (its Vulkan 1.3 device setup is only made then:
 config_fsr4_needs_restart). FSR 4 retains upstream's provider/fallback rules; selecting it does not install a driver or loader.
 
 While the renderer's FSR is on, live MSAA is 1 and FXAA off (config_fsr_running); turned off, the saved MSAA and FXAA
@@ -152,6 +152,7 @@ and keeps the raw AA values for when FSR is disabled. Existing settings are reta
 and section reset follow upstream's small-monster-sync Off default.
 
 Regression tests cover all FSR quality presets, every new field's persistence,
-invalid enum/float/toggle input, saving with active FSR, FSR turned off while running (MSAA / FXAA back),
-and the maximum 256 quest overrides alongside the expanded schema.
+invalid enum/float/toggle input, saving with active FSR, FSR turned off while running (MSAA / FXAA back), the
+size rows live (a larger 3D picture than at start-up included), and the maximum 256 quest overrides alongside the
+expanded schema.
 The panel test exercises provider/quality selection and saving with a gamepad.

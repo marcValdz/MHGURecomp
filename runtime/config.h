@@ -160,7 +160,8 @@ extern uint32_t g_render_size[2];  // read by the game code (tools/gen.py PATCHE
 extern float g_render_aspect;      // the picture's shape, 16:10 or wider: the 3D cameras' aspect (tools/gen.py PATCHES)
 extern float g_fov_scale;          // boot diagnostic value; camera_fovy reads config_live_fov()
 extern uint32_t g_ui_size[2];      // the game's 2D canvas size (tools/gen.py PATCHES: 0xdbcd48, 0xdbcd54)
-extern float g_ui_anchor_aspect;   // the HUD's width / height, 16:9 .. g_render_aspect (nvn/vulkan/exec.c)
+extern float g_ui_anchor_aspect;   // the HUD's width / height, 16:9 .. g_render_aspect (nvn/vulkan/exec.c; follows the
+                                   // picture's shape live: hle/rendersize.c)
 extern uint32_t g_fsr_output[2];   // FSR on at start-up: the size it upscales to (what g_render_size would be without
                                    // it), else 0 (FSR turned on later upscales to g_render_size: fsr.c vk_fsr_init)
 extern float g_fsr_lod_bias;       // FSR on at start-up: texture LOD bias for the lower render size, log2(render / output);
@@ -172,6 +173,9 @@ extern volatile float g_preview_box_aspect[4];  // model preview boxes drawn lat
 extern volatile uint64_t g_preview_box_present[4], g_preview_cam_present;  // a camera got its 16:9 shape (camera_aspect)
 
 void config_load(void);  // before the window and the guest start
+// The 3D picture's size, the size it is shown at (FSR's output; without FSR the same) and its shape, as c makes them
+void config_sizes(const Config *c, int render[2], int out[2], float *aspect);
+float config_ui_aspect(int anchor, float aspect);  // the HUD's width / height for UIAnchor (UI_*) on a picture that shape
 void config_path(char *buf, size_t size);  // the settings file (MHGU_CONFIG, else mhgurecomp.ini)
 
 // The settings of the file, one row each (config.c g_settings): what reads, writes and checks them, and what the
@@ -225,7 +229,10 @@ int config_aa_choice(const Config *c);              // AA_CHOICE_*: what FXAA, F
 void config_set_aa_choice(Config *c, int choice);  // (out of range: nothing changes)
 int config_live_msaa(void);  // 1 while the renderer's FSR is on
 int config_live_fsr(void);   // [Upscaler] FSR as saved now: switched at the next present (nvn/vulkan/fsr.c vk_fsr_follow)
+void config_sizes_live(bool on);   // (hle/rendersize.c) false: RenderResolution, AspectRatio, FSRQuality need a restart
+bool config_sizes_are_live(void);
 void config_fsr_running(bool on);  // (fsr.c) FSR is on / off now: MSAA and FXAA give way to it while it is on
+void config_live_sizes(int render[2], int out[2], float *aspect);  // as saved now (config_sizes; hle/rendersize.c)
 int config_live_vsync(void);
 int config_live_face_buttons(void);
 int config_live_menu_confirm(void);

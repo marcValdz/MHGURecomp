@@ -5,7 +5,8 @@ Vulkan renderer. With `[Upscaler] FSR = On` the game renders its 3D picture at a
 full resolution from several jittered frames (and anti-aliases it), and the HUD is drawn at full resolution on top.
 Default: Off. With FSR off nothing of it runs (every hook point is behind `g_fsr_on`; the camera hooks are always set
 and pass straight to the game's functions). It is switched on and off between frames from the settings menu
-(fsr.c `vk_fsr_follow`, at the render size of start-up).
+(fsr.c `vk_fsr_follow`), and made again at new sizes when the 3D picture's size or FSR's output size changes
+(hle/rendersize.c).
 
 ## What works (checked in game, RX 9070 XT, Windows, 1920x1080 window unless noted)
 
@@ -239,7 +240,8 @@ better than native + FXAA. Quality and below pay off on slower GPUs or very high
 - A draw left out as static that starts moving keeps camera vectors until its 600 frames are over (10 s at 60 fps);
   which draws were left out was not checked one by one (the log only counts them: 6-56 at a time in the tests).
 - Area-intro cutscenes and other event cameras are shown scaled (no FSR) while the main camera hook does not run.
-- Output size is fixed at start-up; a window resized later shows the output scaled (as the 3D picture was).
+- The output size follows the settings (Mode, Resolution, RenderResolution, AspectRatio, FSRQuality: hle/rendersize.c);
+  a window resized by hand shows the output scaled (as the 3D picture is).
 - After the start of the HUD: copies into H / P go to the render-size originals, and HUD draws that would depth-test
   against the scene's depth see an empty D'; neither was seen in the tested frames (HUD draws have depth / stencil off).
 - GPU requirements: subgroup operations, `shaderStorageImageWriteWithoutFormat`, FSR's storage formats; without them

@@ -182,6 +182,9 @@ TexBackend *vk_tex_ms_readable(TexBackend *m);  // a sampled copy for its resolv
 void vk_ms_resolve(TexBackend *b);  // (exec.c) b up to date with its multisampled companion before b is read
 VkSampler vk_sampler(NvnSamplerDesc *d);
 void vk_set_lod_bias(float bias);  // mipmapped samplers' added LOD bias (FSR's, else 0): cached samplers made again
+// (exec.c) the part of the game's window texture t its last draws covered (a smaller 3D picture: hle/rendersize.c)
+bool vk_drawn_part(NvnTexture *t, float *cu, float *cv);
+bool vk_drawn_now(NvnTexture *t);  // (exec.c) the window texture t was drawn into in this frame
 VkSampler vk_default_sampler(bool linear);
 void vk_image_init_layout(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect);
 // Destruction once every submission that may use the object has completed.

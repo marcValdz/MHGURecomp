@@ -48,6 +48,7 @@
 #include <ffx_vk_portable.h>
 
 #include "../../camera_jitter.h"
+#include "../../hle/rendersize.h"
 #include "../../kernel.h"
 #include "fsr.h"
 #include "fsr4.h"
@@ -1922,17 +1923,22 @@ void vk_fsr_draw(const FsrDraw *d) {
     }
 }
 
+// A target of the render size, or of the start-up size with a smaller 3D picture in its top-left (hle/rendersize.c)
+static bool render_sized(NvnTexture *t) {
+    return (t->width == rw && t->height == rh) || rendersize_startup(t->width, t->height);
+}
+
 NvnTexture *vk_fsr_map(NvnTexture *t, bool depth) {
     if (!redirect || !t) return t;
     if (t == g_h) return &st_h.fake;
     if (depth) {
-        if (t->backend && t->width == rw && t->height == rh) {
+        if (t->backend && render_sized(t)) {
             NvnTexture *s = stand(&st_d, t, ow, oh, false);
             return s ? s : t;
         }
         return t;
     }
-    if (presented_texture(t) && t->width == rw && t->height == rh) {
+    if (presented_texture(t) && render_sized(t)) {
         NvnTexture *s = stand(&st_p, t, ow, oh, false);
         return s ? s : t;
     }
@@ -2074,7 +2080,7 @@ NvnTexture *vk_fsr_present(NvnTexture *t) {
     NvnTexture *show = t;
     if (redirect) {
         if (t == g_h) show = &st_h.fake;
-        else if (st_p.fake.backend && presented_texture(t) && t->width == rw && t->height == rh) show = &st_p.fake;
+        else if (st_p.fake.backend && presented_texture(t) && render_sized(t)) show = &st_p.fake;
     }
     // learn H: what the frame's last draw (the one into the presented texture) sampled
     if (last_target == t && last_src && last_src != t && last_src->width == rw && last_src->height == rh && last_src->backend &&
@@ -2232,9 +2238,29 @@ static void fsr_stop(void) {
 }
 
 // [Upscaler] FSR as saved now (a Save in the settings menu), switched between two frames: device.c backend_present,
-// under vk_lock, after the present, at the sizes of start-up (FSR off at start-up: Native AA at the render size).
+// under vk_lock, after the present. Its sizes follow the 3D picture's (g_render_size: the size the game draws at now,
+// hle/rendersize.c) and the size it is shown at (FSR's output, config_live_sizes): a change makes its images and
+// context again at the new sizes.
 static bool fsr_failed;  // it could not start: not tried again
 void vk_fsr_follow(void) {
+    int live_rs[2], out[2];
+    float aspect;
+    config_live_sizes(live_rs, out, &aspect);
+    uint32_t nw = g_render_size[0], nh = g_render_size[1], now = out[0] > 0 ? (uint32_t)out[0] : nw,
+             noh = out[1] > 0 ? (uint32_t)out[1] : nh;
+    // (once the game draws at the size wanted: a new output size and a new render size together, one restart)
+    if ((nw != rw || nh != rh || now != ow || noh != oh) && rendersize_settled()) {
+        uint64_t t0 = plat_now_ns();
+        bool was = g_fsr_on;
+        if (was) fsr_stop();
+        LOG("[fsr] sizes %ux%u -> %ux%u now %ux%u -> %ux%u\n", rw, rh, ow, oh, nw, nh, now, noh);
+        rw = nw, rh = nh, ow = now, oh = noh;
+        if (was) {
+            fsr_failed = !fsr_start();
+            config_fsr_running(g_fsr_on);
+            LOG("[live] FSR at the new sizes (%.1f ms)\n", (plat_now_ns() - t0) / 1e6);
+        }
+    }
     bool want = config_live_fsr() && !fsr_failed;
     if (want == g_fsr_on) return;
     uint64_t t0 = plat_now_ns();

@@ -286,7 +286,7 @@ void ui_toggle_fullscreen(void) {
 }
 
 // [Display] Mode and Resolution saved in the settings menu: the window follows at once (the swapchain follows the
-// window, nvn/vulkan/device.c); the 3D picture keeps its start-up size, scaled to the window.
+// window, nvn/vulkan/device.c). The 3D picture follows (hle/rendersize.c).
 static void display_follow(void) {
     int mode, w, h;
     config_live_display(&mode, &w, &h);

@@ -150,13 +150,19 @@ int main(int argc, char **argv) {
     assert(!loaded.confirm_exit && fabsf(loaded.fov - 1.2f) < 0.001f);
     assert(!config_restart_required(&loaded));
     assert(config_live_fps()==120 && config_live_msaa()==4 && config_live_face_buttons()==FACE_LABEL);
-    assert(config_restart_key("RenderResolution") && !config_restart_key("FOV"));
+    assert(!config_restart_key("FOV"));
     assert(!config_restart_key("MSAA") && !config_restart_key("VSync") && !config_restart_key("FaceButtons"));
-    // The window's mode and size and FSR on / off are live (ui.c display_follow, fsr.c vk_fsr_follow)
-    assert(!config_restart_key("Mode") && !config_restart_key("Resolution") && !config_restart_key("FSR"));
+    // The size rows are live, a larger 3D picture than at start-up too (hle/rendersize.c)
+    const char *const sizes[] = {"Mode", "Resolution", "RenderResolution", "AspectRatio", "FSR", "FSRQuality"};
+    for (size_t i = 0; i < sizeof sizes / sizeof *sizes; i++) assert(!config_restart_key(sizes[i]));
     Config d = loaded;
-    d.display_mode = loaded.display_mode == DISPLAY_WINDOWED ? DISPLAY_BORDERLESS : DISPLAY_WINDOWED;
-    d.width = 2560; d.height = 1440; d.fsr = !loaded.fsr;
+    d.render_w = 3840; d.render_h = 1646;  // (larger than the start-up 1920x822)
+    d.fsr = 1; d.fsr_quality = FSR_NATIVE;
+    assert(!config_restart_required(&d));
+    config_sizes_live(false);  // (the game's render system not as expected: hle/rendersize.c) the render size at a restart
+    Config win = loaded; win.width = 2560; win.height = 1440;  // (the window still follows: ui.c)
+    assert(config_restart_required(&d) && !config_restart_required(&win) && !config_sizes_are_live());
+    config_sizes_live(true);
     assert(!config_restart_required(&d));
     assert(config_restart_key("framerate") == config_restart_key("FPS") && !config_restart_key("NoSuchKey"));
     // The menu's help: the default ini's comments, wrapped lines joined, the default last (none when empty)
@@ -209,7 +215,9 @@ int main(int argc, char **argv) {
     fsr_config.fsr=1;fsr_config.fsr_upscaler=FSR_UP_4;fsr_config.fsr_quality=FSR_BALANCED;
     fsr_config.fsr_sharpness=.65f;fsr_config.fsr_objmotion=0;fsr_config.fsr_reactive=.35f;fsr_config.fsr_animsurf=0;
     fsr_config.msaa=8;fsr_config.fxaa=1;
-    assert(config_save(&fsr_config,error,sizeof error));assert(config_restart_required(&fsr_config));  // (FSRQuality)
+    assert(config_save(&fsr_config,error,sizeof error));  // (all live but FSR 4, which this run did not start with)
+    assert(config_restart_required(&fsr_config) && config_fsr4_needs_restart(&fsr_config));
+    Config fsr3=fsr_config;fsr3.fsr_upscaler=FSR_UP_3;assert(!config_restart_required(&fsr3));
     text = read_file(path);
     assert(strstr(text, "Sharpness = 0.65\r\n") && strstr(text, "Reactive = 0.35\r\n") && strstr(text, "Upscaler = FSR4\r\n"));
     free(text);

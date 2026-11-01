@@ -12,6 +12,7 @@
 #include "hle.h"
 #include "hle/itembar.h"
 #include "hle/mousecam.h"
+#include "hle/rendersize.h"
 #include "kernel.h"
 #include "mods.h"
 #include "engine_module.h"
@@ -83,6 +84,7 @@ static void boot(const char *root) {
     movelog_init();  // (debug, MHGU_LOG_MOVES: runtime/hle/movelog.c)
     quickhunt_init();  // (debug, MHGU_QUICKHUNT: runtime/hle/quickhunt.c)
     camjit_init();  // (FSR: the main camera and its jitter: runtime/hle/camera_jitter.c)
+    rendersize_init();  // (the 3D picture's size changed while the game runs: runtime/hle/rendersize.c)
     mousecam_init();  // (mouse look on the hunt camera's angles: runtime/hle/mousecam.c)
     itembar_init();  // (the mouse wheel on the item bar: runtime/hle/itembar.c)
     { void textlayout_init(void); textlayout_init(); }  // (UI text spacing and kerning: runtime/hle/textlayout.c)

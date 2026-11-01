@@ -23,6 +23,7 @@
 #include <immintrin.h>
 #endif
 
+#include "../../hle/rendersize.h"
 #include "../../kernel.h"
 #include "fsr.h"
 #include "hdr.h"
@@ -1045,6 +1046,8 @@ static void ui_group_add(float *m, float pos_z, float pos_x, float pos_y, int va
 }
 static VkRenderPass pass_rp;
 static float pass_sx = 1.0f, pass_sy = 1.0f;  // FSR: the pass renders into output-size stand-ins (fsr.c): viewport, scissor x
+// (either axis alone too: a window texture made taller than at start-up, hle/rendersize.c)
+static bool pass_scaled(void) { return pass_sx != 1.0f || pass_sy != 1.0f; }
 
 // Redundant-state filter: what draw() last set in the current command buffer (forgotten whenever something else may
 // have recorded state: a new command buffer, a new pass, the clear pipeline).
@@ -1689,6 +1692,30 @@ static void ms_resolve_sampled(int stage, ShaderInfo *si) {
     }
 }
 
+// The part of the game's window texture t its last draw covers (hle/rendersize.c): the 3D picture's size, at most the
+// start-up size. By the sizes, not that draw's viewport: the pass may begin with a clear, before it is set.
+static void window_part(NvnTexture *t, float *w, float *h) {
+    uint32_t w0, h0;
+    if (!rendersize_window(t)) return;
+    rendersize_grown(&w0, &h0);
+    if (!w0 || !h0) return;  // (before the render system)
+    uint32_t pw = g_render_size[0] < w0 ? g_render_size[0] : w0, ph = g_render_size[1] < h0 ? g_render_size[1] : h0;
+    if (pw < *w) *w = (float)pw;
+    if (ph < *h) *h = (float)ph;
+}
+
+// A picture larger than the start-up size, the game's window texture t made larger with it (hle/rendersize.c): the
+// game's last draw into it still covers at most the start-up size, stretched over all of it (by the sizes, as
+// window_part). false (1 x 1): not such a texture.
+static bool window_stretch(NvnTexture *t, float *sx, float *sy) {
+    uint32_t w0, h0;
+    *sx = *sy = 1.0f;
+    if (!rendersize_window(t) || !rendersize_grown(&w0, &h0)) return false;
+    *sx = (float)t->width / (float)(t->width < w0 ? t->width : w0);
+    *sy = (float)t->height / (float)(t->height < h0 ? t->height : h0);
+    return true;
+}
+
 static void begin_pass(void) {
     if (in_pass && !st.rt_dirty) return;
     vk_end_pass();
@@ -1713,7 +1740,14 @@ static void begin_pass(void) {
         vk_rt_widen(t, vk_fsr_input(t) ? WIDE_NONE : vk_hdr_rt_float(t) ? WIDE_FLOAT16 : vk_wide_rt_on() ? WIDE_UNORM16 : WIDE_NONE);
         if (g_fsr_on) {  // FSR: from the start of the HUD on, an output-size stand-in (fsr.c)
             NvnTexture *s = vk_fsr_map(t, false);
-            if (s != t) pass_sx = (float)s->width / (float)t->width, pass_sy = (float)s->height / (float)t->height, t = s;
+            if (s != t) {  // (a window texture: only the part the game's last draw covers is the picture)
+                float lw = (float)t->width, lh = (float)t->height;
+                window_part(t, &lw, &lh);
+                pass_sx = (float)s->width / lw, pass_sy = (float)s->height / lh, t = s;
+            }
+        } else {
+            float sx, sy;
+            if (window_stretch(t, &sx, &sy)) pass_sx = sx, pass_sy = sy;
         }
         renderer_mark_gpu_owned(t);
         VkImageView v = vk_view(t, &st.rt.cview[i], st.rt.has_cview[i], true, TEXTYPE_2D);
@@ -1733,7 +1767,7 @@ static void begin_pass(void) {
     }
     pass_depth = VK_FORMAT_UNDEFINED;
     pass_d24_as_float = false;
-    NvnTexture *dt = st.rt.depth && pass_sx != 1.0f ? vk_fsr_map(st.rt.depth, true) : st.rt.depth;  // (FSR: as above)
+    NvnTexture *dt = st.rt.depth && pass_scaled() ? vk_fsr_map(st.rt.depth, true) : st.rt.depth;  // (FSR: as above)
     if (dt) {
         renderer_mark_gpu_owned(dt);
         VkImageView v = vk_view(dt, &st.rt.dview, st.rt.has_dview, true, TEXTYPE_2D);
@@ -1856,7 +1890,7 @@ static void pass_size(int *w, int *h) {
     for (int i = 0; i < st.rt.ncolor && !*w; i++)
         if (st.rt.color[i]) { *w = (int)st.rt.color[i]->width; *h = (int)st.rt.color[i]->height; }
     if (!*w && st.rt.depth) { *w = (int)st.rt.depth->width; *h = (int)st.rt.depth->height; }
-    if (pass_sx != 1.0f) *w = (int)(*w * pass_sx + 0.5f), *h = (int)(*h * pass_sy + 0.5f);  // (FSR: output-size stand-ins)
+    if (pass_scaled()) *w = (int)(*w * pass_sx + 0.5f), *h = (int)(*h * pass_sy + 0.5f);  // (FSR: output-size stand-ins)
 }
 
 volatile int g_shadow_scissor_mode;  // (debug, F8 in host_input.c) depth-only passes: 0 as set, 1 none, 2 mirrored in the viewport
@@ -1971,7 +2005,7 @@ static VkRect2D scissor_rect(void) {
     }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 1) { x = (int)st.viewport[0][0]; y = (int)st.viewport[0][1]; sw = (int)st.viewport[0][2]; sh = (int)st.viewport[0][3]; }
     if (!st.rt.ncolor && g_shadow_scissor_mode == 2) y = 2 * (int)st.viewport[0][1] + (int)st.viewport[0][3] - y - sh;
-    if (pass_sx != 1.0f) {  // FSR: the guest's rectangle (render size) on the output-size stand-in
+    if (pass_scaled()) {  // FSR: the guest's rectangle (render size) on the output-size stand-in
         double x1 = floor(x * (double)pass_sx), y1 = floor(y * (double)pass_sy);
         double x2 = ceil(((double)x + sw) * pass_sx), y2 = ceil(((double)y + sh) * pass_sy);
         x = (int)x1, y = (int)y1;
@@ -3604,6 +3638,46 @@ static VkDescriptorBufferInfo cbuf_info(int stage, ShaderInfo *si, int k, uint32
     return ubo_span(guest_copy(r.addr, size), size);
 }
 
+// How far the last frame that drew into each target reached (its draws' viewports' right / bottom edges): the part of
+// the start-up size's window texture a smaller 3D picture was drawn into, as the frame presented drew it
+// (hle/rendersize.c: the size changes on the game's thread, so the frames around a change are told apart by what they
+// drew; in the frame of a switch the game draws nothing into it, and the last part drawn is still what it holds).
+static struct { NvnTexture *t; uint64_t frame; float w, h; } drawn[8];
+static void drawn_note(NvnTexture *t, int ntex, uint32_t count) {
+    float w = st.viewport[0][0] + st.viewport[0][2], h = st.viewport[0][1] + st.viewport[0][3];
+    float sx, sy;
+    if (!g_fsr_on) window_stretch(t, &sx, &sy), w *= sx, h *= sy;  // (stretched over a larger window texture)
+    if (!rendersize_window(t)) return;  // (the window textures only: 3, presented in turn)
+    static int log_on = -1;  // (debug, MHGU_PRESENT_LOG) each draw into the start-up size's window texture
+    if (log_on < 0) log_on = getenv("MHGU_PRESENT_LOG") != NULL;
+    if (log_on)
+        LOG("[drawn] frame %llu: %p viewport %g,%g %gx%g, %d textures, %u vertices\n", (unsigned long long)g_present_count,
+            (void *)t, st.viewport[0][0], st.viewport[0][1], st.viewport[0][2], st.viewport[0][3], ntex, count);
+    int i = 0, old = 0;
+    while (i < 8 && drawn[i].t != t) {
+        if (drawn[i].frame < drawn[old].frame) old = i;
+        i++;
+    }
+    if (i == 8) i = old, drawn[i].t = t, drawn[i].frame = ~0ull;
+    if (drawn[i].frame != g_present_count) drawn[i].frame = g_present_count, drawn[i].w = drawn[i].h = 0;
+    if (w > drawn[i].w) drawn[i].w = w;
+    if (h > drawn[i].h) drawn[i].h = h;
+}
+bool vk_drawn_now(NvnTexture *t) {
+    for (int i = 0; i < 8; i++)
+        if (drawn[i].t == t) return drawn[i].frame == g_present_count;
+    return false;
+}
+bool vk_drawn_part(NvnTexture *t, float *cu, float *cv) {
+    if (!rendersize_window(t)) return false;
+    for (int i = 0; i < 8; i++)
+        if (drawn[i].t == t && drawn[i].w > 0 && drawn[i].h > 0) {
+            *cu = fminf(drawn[i].w / (float)t->width, 1.0f), *cv = fminf(drawn[i].h / (float)t->height, 1.0f);
+            return *cu < 1.0f || *cv < 1.0f;
+        }
+    return false;
+}
+
 static int32_t fsr_cap_base;  // (FSR capture draw: its FSR_CAP_BASE_BINDING value, stage_set)
 
 static void texture_info(int stage, ShaderInfo *si, int i, VkDescriptorImageInfo *out) {
@@ -4067,6 +4141,7 @@ static void draw(CmdRec *r, bool indexed) {
     VkPrimitiveTopology topo;
     bool native = topology(mode, &topo);
     if (!native && mode != 6 && mode != 7 && mode != 9) { stat_skipped++; return; }
+    if (st.rt.ncolor && st.rt.color[0]) drawn_note(st.rt.color[0], pr->fi->ntex, (uint32_t)r->x[2]);
     // FSR / SMAA T2x: at the start of the HUD they run before this draw (fsr.c); SMAA S2x: which target is the scene
     if (g_temporal_on || g_s2x_on) vk_fsr_draw(&fd);
 
@@ -4668,8 +4743,9 @@ static VkImageView raw_view(TexBackend *b) {
     return vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, f, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
-// Inside the window image's render pass (device.c): the game image into (vx, vy, vw, vh).
-void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh) {
+// Inside the window image's render pass (device.c): the game image into (vx, vy, vw, vh); cu x cv: the share of it
+// shown, from its top-left as the game sees it (1, 1: all; hle/rendersize.c: a smaller 3D picture drawn into it).
+void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, float vw, float vh, float cu, float cv) {
     if (!b || !b->image || (b->aspect & ~VK_IMAGE_ASPECT_COLOR_BIT)) return;
     bool hdr = vk_hdr_presented_bt2020();
     VkPipeline p = present_pipeline(hdr);
@@ -4682,8 +4758,9 @@ void vk_present_draw(VkCommandBuffer cb, TexBackend *b, float vx, float vy, floa
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, present_layout, 0, 1, &ds, 0, NULL);
     VkViewport vp = {vx, vy, vw, vh, 0, 1};
     vkCmdSetViewport(cb, 0, 1, &vp);
-    float pv[12] = {nvn_window_origin() == 0 ? 1.0f : 0.0f, 0, 0, 0, 0, 0, 1, 1,  // (flip, crop origin / size)
-                    hdr ? vk_hdr_gamma() : 0, 0, 0, 0};                       // (HDR: the intermediate's gamma)
+    bool flip = nvn_window_origin() == 0;  // (lower-left origin: the game's top-left is the image's last rows)
+    float pv[12] = {flip ? 1.0f : 0.0f, 0, 0, 0, 0, flip ? 1.0f - cv : 0.0f, cu, cv,  // (flip, crop origin / size)
+                    hdr ? vk_hdr_gamma() : 0, 0, 0, 0};                                 // (HDR: the intermediate's gamma)
     vkCmdPushConstants(cb, present_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48, pv);
     vkCmdDraw(cb, 3, 1, 0, 0);
 }
