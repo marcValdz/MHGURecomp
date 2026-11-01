@@ -181,7 +181,9 @@ shimmer on static detail; the standing frames flicker like FSR 3.1's).
   (then: `the driver gave no upscaler provider`, FSR 3.1). The driver DLL is trusted code loaded from the driver store
   (or beside the exe: do not put a copy there you do not trust).
 - FSR 4 on the AMD driver recreates its network (pipelines) when the ratio changes; the context is created once so
-  this port never does. Changing Upscaler / FSRQuality needs a restart (as FSR 3.1's quality already did).
+  this port never does. Changing FSRQuality needs a restart (as FSR 3.1's quality already did); the Upscaler switches
+  between frames (fsr.c `fsr_live_options`) when the game started with FSR 4 or FSR 4 Lite: only then does the device
+  get Vulkan 1.3 and FSR 4's extensions, so other players run upstream's setup; from FSR 3.1 it needs a restart.
 - The colour input is gamma-encoded LDR: FSR 4 was designed for that as well as HDR; `MHGU_FSR4_LINEAR=1` compares.
 - The FSR 4 GPU cost in the table includes the shared prep / finish passes (~0.5 ms at 720p), measured with the
   renderer's gpuprof, not with the provider's own timestamps.

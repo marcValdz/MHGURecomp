@@ -269,6 +269,7 @@ int config_live_bonus_content(void);    // [Bonus Content] BonusContent: each ti
 void config_live_display(int *mode, int *width, int *height);  // [Display] Mode, Resolution (0x0: the desktop's) (ui.c)
 int config_live_fsr_objmotion(void);    // [Upscaler] ObjectMotion, switched between FSR frames (nvn/vulkan/fsr.c)
 int config_live_fsr_animsurf(void);     // [Upscaler] AnimSurf, switched between FSR frames (nvn/vulkan/fsr.c)
+int config_live_fsr_upscaler(void);     // [Upscaler] Upscaler: FSR_UP_*, switched between FSR frames (nvn/vulkan/fsr.c)
 int config_live_discord(void);         // [Discord] RichPresence
 int config_live_discord_hunter(void);  // [Discord] ShowHunter
 int config_live_share_urgent(void);    // [Multiplayer] ShareUrgentCredit
@@ -279,6 +280,7 @@ bool config_restart_required(const Config *draft); // Raw cold fields vs this pr
 // it put back when the menu closes without saving them (config_preview_end; nothing to do after a save).
 void config_preview(const Config *draft);
 void config_preview_end(void);
+bool config_fsr4_needs_restart(const Config *draft);  // FSR 4 wanted, but the game started without it (config_store.c)
 float config_audio_gain(void);  // atomic, safe on audio threads; 0 while muted in the background
 void config_window_focus(bool focused);  // the window got / lost the focus (runtime/host_input.c)
 int config_language(void);     // last saved UI language, atomic across host threads

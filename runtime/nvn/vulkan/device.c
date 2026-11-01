@@ -219,7 +219,7 @@ static void create_device(void) {
         g_vk.no_mirror_clamp = !has_ext(ep, ne, VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME);
         if (!g_vk.no_mirror_clamp) ext[n_ext++] = VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME;
     }
-    bool fsr4 = g_config.fsr && g_config.fsr_upscaler >= FSR_UP_4 && vk_fsr4_device_exts(ep, ne, ext, &n_ext);  // FSR 4: its extensions
+    bool fsr4 = g_config.fsr && g_config.fsr_upscaler >= FSR_UP_4 && vk_fsr4_device_exts(ep, ne, ext, &n_ext);  // FSR 4: its extensions (only when the game starts with it: config_restart_required)
     free(ep);
 
     // optional features: whatever the GPU has of what the backend can use

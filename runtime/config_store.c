@@ -17,7 +17,7 @@
 #endif
 
 static Config saved, startup;
-static bool have_saved, runtime_ready, runtime_fsr;
+static bool have_saved, runtime_ready, runtime_fsr, runtime_fsr4;  // (runtime_fsr4: the device was made for FSR 4)
 static SDL_AtomicInt window_focused = {1};
 // [Display]
 static SDL_AtomicInt live_fov;
@@ -30,7 +30,7 @@ static SDL_AtomicInt live_aa;
 // [Upscaler]
 static SDL_AtomicInt live_fsr_sharpness;
 static SDL_AtomicInt live_fsr_reactive;
-static SDL_AtomicInt live_fsr_objmotion, live_fsr_animsurf;
+static SDL_AtomicInt live_fsr_objmotion, live_fsr_animsurf, live_fsr_upscaler;
 // [Graphics]
 static SDL_AtomicInt live_draw = {0x3f800000};
 static SDL_AtomicInt live_smooth;
@@ -140,6 +140,7 @@ static void publish_live(const Config *c, bool all) {
     }
     if (all || c->fsr_objmotion != saved.fsr_objmotion) SDL_SetAtomicInt(&live_fsr_objmotion, c->fsr_objmotion);
     if (all || c->fsr_animsurf != saved.fsr_animsurf) SDL_SetAtomicInt(&live_fsr_animsurf, c->fsr_animsurf);
+    if (all || c->fsr_upscaler != saved.fsr_upscaler) SDL_SetAtomicInt(&live_fsr_upscaler, c->fsr_upscaler);
     for (int i = 0; i < BINDS; i++)
         for (int k = 0; k < BIND_KEYS; k++)
             if (all || c->binds[i][k] != saved.binds[i][k]) SDL_SetAtomicInt(&live_binds[i][k], c->binds[i][k]);
@@ -207,6 +208,7 @@ void config_store_loaded(const Config *c) {
 }
 void config_runtime_init(const Config *effective) {
     startup = saved; runtime_ready = true; runtime_fsr = effective->fsr != 0;
+    runtime_fsr4 = effective->fsr && effective->fsr_upscaler >= FSR_UP_4;
     publish_live(effective, true);
     const char *override = getenv("MHGU_FRAMERATE");
     if (override && *override) {
@@ -281,6 +283,7 @@ void config_live_display(int *mode, int *width, int *height) {
 }
 int config_live_fsr_objmotion(void) { return SDL_GetAtomicInt(&live_fsr_objmotion); }
 int config_live_fsr_animsurf(void) { return SDL_GetAtomicInt(&live_fsr_animsurf); }
+int config_live_fsr_upscaler(void) { return SDL_GetAtomicInt(&live_fsr_upscaler); }
 int config_live_discord(void) { return SDL_GetAtomicInt(&live_discord); }
 int config_live_discord_hunter(void) { return SDL_GetAtomicInt(&live_discord_hunter); }
 int config_live_share_urgent(void) { return SDL_GetAtomicInt(&live_share_urgent); }
@@ -315,8 +318,13 @@ bool config_confirm_exit(void) { return SDL_GetAtomicInt(&confirm_exit) != 0; }
 bool config_menu_chord(void) { return SDL_GetAtomicInt(&menu_chord) != 0; }
 int config_show_battery(void) { return SDL_GetAtomicInt(&show_battery); }
 bool config_show_fps(void) { return SDL_GetAtomicInt(&show_fps) != 0; }
+// FSR 4 needs Vulkan 1.3 and its device extensions, which the device only gets when the game starts with FSR 4 chosen
+// (nvn/vulkan/device.c: other players run upstream's setup). Wanting it without them is a restart; switching between
+// FSR 3.1, FSR 4 and FSR 4 Lite on a device made for FSR 4 is live (nvn/vulkan/fsr.c fsr_live_options).
+bool config_fsr4_needs_restart(const Config *c) { return runtime_ready && !runtime_fsr4 && c->fsr && c->fsr_upscaler >= FSR_UP_4; }
 bool config_restart_required(const Config *c) {
     if (!runtime_ready) return false;
+    if (config_fsr4_needs_restart(c)) return true;
     for (int i = 0; i < g_nsettings; i++) {
         const ConfigSetting *s = &g_settings[i];
         if (s->restart && (!config_valid(s, c) || !config_equal(s, c, &startup))) return true;

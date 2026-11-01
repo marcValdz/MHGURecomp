@@ -140,9 +140,10 @@ cover the game itself.
 [Upscaler] fields: FSR, provider (FSR 3.1 / FSR 4), quality, sharpness, object
 motion, reactive mask and animated surfaces. They persist without removing INI
 comments/aliases, participate in draft equality, dirty guards and section reset.
-Sharpness and reactive mask apply at Save (each FSR frame reads them, fsr.c run_fsr), object motion and animated
-surfaces at the next frame (fsr.c fsr_live_options makes or frees what they need); the others are marked
-restart-only. FSR 4 retains upstream's provider/fallback rules; selecting it does not install a driver or loader.
+Sharpness and reactive mask apply at Save (each FSR frame reads them, fsr.c run_fsr), object motion, animated
+surfaces and the upscaler at the next frame (fsr.c fsr_live_options makes or frees what they need); FSR on / off and
+FSR quality are marked restart-only, and so is choosing FSR 4 when the game started without it (its Vulkan 1.3 device
+setup is only made then: config_fsr4_needs_restart). FSR 4 retains upstream's provider/fallback rules; selecting it does not install a driver or loader.
 
 Active FSR keeps live MSAA at 1 and FXAA off, including after saving other
 settings or staging FSR Off for the next boot. The editor shows the AA rows as disabled "Off (FSR)" while FSR owns them,

@@ -231,6 +231,15 @@ int main(int argc, char **argv) {
     assert(config_save(&fsr_saved,error,sizeof error) && !config_restart_required(&fsr_saved));
     assert(config_live_fsr_objmotion() && config_live_fsr_animsurf());
     assert(!config_restart_key("ObjectMotion") && !config_restart_key("AnimSurf"));
+    fsr_saved.fsr_upscaler=FSR_UP_3;  // Upscaler: switched at the next FSR frame (FSR 4 started the first time it is wanted)
+    assert(config_save(&fsr_saved,error,sizeof error) && !config_restart_required(&fsr_saved) && config_live_fsr_upscaler()==FSR_UP_3);
+    assert(!config_restart_key("Upscaler"));
+    fsr_saved.fsr_upscaler=FSR_UP_4_LITE;  // (the game started with FSR 4: its device is there, so FSR 4 Lite is live too)
+    assert(config_save(&fsr_saved,error,sizeof error) && !config_restart_required(&fsr_saved) && config_live_fsr_upscaler()==FSR_UP_4_LITE);
+    fsr_saved.fsr_upscaler=FSR_UP_3;assert(config_save(&fsr_saved,error,sizeof error));
+    g_config=initial;config_load();fsr_saved=config_editable();  // Started with FSR 3.1: no FSR 4 device, so FSR 4 is a restart
+    Config with4=fsr_saved;with4.fsr_upscaler=FSR_UP_4;
+    assert(config_fsr4_needs_restart(&with4) && config_restart_required(&with4) && !config_restart_required(&fsr_saved));
     bad=fsr_saved;bad.fsr_quality=5;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_upscaler=3;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_sharpness=NAN;assert(!config_save(&bad,error,sizeof error));

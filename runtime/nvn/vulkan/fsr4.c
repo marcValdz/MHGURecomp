@@ -54,6 +54,7 @@ bool vk_fsr4_device_exts(const VkExtensionProperties *ep, uint32_t n, const char
 bool vk_fsr4_device_features(VkPhysicalDeviceVulkan11Features *f11, VkPhysicalDeviceVulkan12Features *f12, VkPhysicalDeviceFeatures *f) { (void)f11, (void)f12, (void)f; return false; }
 bool vk_fsr4_init(void) { LOG("[fsr4] FSR 4 needs AMD's Windows driver: FSR 3.1 is used\n"); g_fsr4_fallback = NO_FSR4_START; return false; }
 bool vk_fsr4_ready(void) { return false; }
+void vk_fsr4_drop(void) {}
 const char *vk_fsr4_name(void) { return "FSR 4"; }
 bool vk_fsr4_dispatch(const Fsr4Dispatch *d) { (void)d; return false; }
 
@@ -728,6 +729,12 @@ bool vk_fsr4_init(void) {
 }
 
 bool vk_fsr4_ready(void) { return loaded && !failed; }
+void vk_fsr4_drop(void) {
+    if (!ctx) return;
+    vkDeviceWaitIdle(g_vk.dev);
+    f_destroy(&ctx, NULL);
+    ctx = NULL;
+}
 const char *vk_fsr4_name(void) { return prov_name[0] ? prov_name : "FSR 4"; }
 
 // ================================================================== context and dispatch
@@ -953,7 +960,7 @@ static void dx12_run(const Fsr4Dispatch *d) {
 #endif
 
 static bool make_context(const Fsr4Dispatch *d) {
-    bool lite = via_amdxc && xc_lite_ok && g_config.fsr_upscaler == FSR_UP_4_LITE;
+    bool lite = via_amdxc && xc_lite_ok && config_live_fsr_upscaler() == FSR_UP_4_LITE;  // (switched live: fsr.c)
     if (ctx && ctx_rw == d->render[0] && ctx_rh == d->render[1] && ctx_ow == d->out[0] && ctx_oh == d->out[1] && ctx_lite == lite) return true;
     if (ctx) {  // (a size or the model changed: the model is read when a context is made)
 #if FSR4_DX12_BRIDGE

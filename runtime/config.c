@@ -722,7 +722,7 @@ const ConfigSetting g_settings[] = {
     {"Anti-aliasing", "AntiAliasing", SET_CHOICE, F(aa), 0, 0, 0, "FXAA,CMAA2,SMAA,SMAAS2x,SMAAT2x,SMAA4x", NULL, false,
      ERR_MISC},
     ON_OFF("Upscaler", "FSR", fsr, true),
-    {"Upscaler", "Upscaler", SET_CHOICE, F(fsr_upscaler), 0, 0, 0, "FSR3|fsr3.1|3,FSR4|4,FSR4Lite|4lite", NULL, true, ERR_FSR},
+    {"Upscaler", "Upscaler", SET_CHOICE, F(fsr_upscaler), 0, 0, 0, "FSR3|fsr3.1|3,FSR4|4,FSR4Lite|4lite", NULL, false, ERR_FSR},
     {"Upscaler", "FSRQuality", SET_CHOICE, F(fsr_quality), 0, 0, 0,
      "NativeAA|native|aa,Quality,Balanced,Performance,UltraPerformance|ultraperf", NULL, true, ERR_FSR},
     {"Upscaler", "Sharpness", SET_FLOAT, F(fsr_sharpness), 0, 0.0f, 1.0f, NULL, NULL, false, ERR_FSR},

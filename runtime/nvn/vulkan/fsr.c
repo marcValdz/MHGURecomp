@@ -1161,6 +1161,14 @@ static bool ctx_make(void) {
     return true;
 }
 
+// The FSR 3.1 context freed once the GPU is idle (the upscaler switched to FSR 4): the next ctx_make makes it again.
+static void ctx_drop(void) {
+    if (!ctx) return;
+    vkDeviceWaitIdle(g_vk.dev);
+    ffxVkPortableUpscaleContextDestroy(ctx);
+    ctx = NULL;
+}
+
 static FfxVkPortableImage ffx_image(TexBackend *b, VkImageUsageFlags usage) {
     FfxVkPortableImage i = {.structSize = sizeof i};
     if (!b) return i;
@@ -2016,6 +2024,29 @@ static void fsr_live_options(bool quiet) {
         if (objvel_failed) LOG("[fsr] object motion could not be set up: camera motion only\n");
         else if (!quiet) LOG("[live] FSR object motion %s (%.1f ms)\n", g_fsr_objvel ? "on" : "off", (plat_now_ns() - t0) / 1e6);
     }
+    // [Upscaler] Upscaler: FSR 4 (or FSR 4 Lite) is started the first time it is wanted (fsr4.c), on a device made for
+    // it: only when the game started with it (device.c; else wanting it is a restart, config_restart_required, and FSR
+    // 3.1 runs until then). A switch frees the other one's context and starts the history anew (FSR 4 <-> Lite: fsr4.c
+    // makes its context again with the other model).
+    static int upscaler = -1;
+    static bool fsr4_tried, fsr4_ok;
+    int up = config_live_fsr_upscaler();
+    if (up != upscaler) {
+        uint64_t t0 = plat_now_ns();
+        bool want4 = up >= FSR_UP_4, device4 = g_config.fsr && g_config.fsr_upscaler >= FSR_UP_4;
+        if (want4 && device4 && !fsr4_tried) fsr4_tried = true, fsr4_ok = vk_fsr4_init();
+        bool was4 = use_fsr4;
+        use_fsr4 = want4 && fsr4_ok;
+        if (use_fsr4 && !was4) ctx_drop();
+        else if (!use_fsr4 && was4) vk_fsr4_drop();
+        prev_cam.seq = 0;  // (a history reset at the next FSR frame)
+        const char *name = up == FSR_UP_4_LITE ? "FSR4Lite" : up == FSR_UP_4 ? "FSR4" : "FSR3";
+        const char *runs = use_fsr4 ? vk_fsr4_name() : !want4 ? "FSR 3.1" : !device4 ? "after a restart, FSR 3.1 until then"
+                                                                                    : "not available, FSR 3.1 is used";
+        if (quiet || upscaler < 0) LOG("[fsr] Upscaler = %s: %s\n", name, runs);
+        else LOG("[live] FSR upscaler %s: %s (%.1f ms)\n", name, runs, (plat_now_ns() - t0) / 1e6);
+        upscaler = up;
+    }
 }
 NvnTexture *vk_fsr_present(NvnTexture *t) {
     s2x_present();  // (before T2x's: from T2x / 4x to S2x, this frame's count is still there)
@@ -2150,10 +2181,6 @@ void vk_fsr_init(void) {
     fsr_live_options(true);
     g_fsr_on = g_temporal_on = true;
     camjit_set(false, rw, rh, 8);
-    if (g_config.fsr_upscaler >= FSR_UP_4) {
-        use_fsr4 = vk_fsr4_init();
-        LOG("[fsr] Upscaler = FSR4: %s\n", use_fsr4 ? vk_fsr4_name() : "not available, FSR 3.1 is used");
-    }
     LOG("[fsr] on (%s): %ux%u -> %ux%u, sharpness %.2f, fp16 %d, object motion %s, reactive %.2f\n",
         use_fsr4 ? vk_fsr4_name() : "FSR 3.1", rw, rh, ow, oh, g_config.fsr_sharpness, g_vk.fsr_fp16, g_fsr_objvel ? "on" : "off",
         g_config.fsr_reactive);
