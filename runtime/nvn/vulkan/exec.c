@@ -2514,8 +2514,8 @@ static void load_program(void *arg) {
     compile_program(p);
 }
 
-// Object motion turned on after p was built (SMAA T2x picked in the menu): its capture variant from the vertex source
-// the program cache keeps (NULL: none; asked once).
+// Object motion turned on after p was built (SMAA T2x picked, or [Upscaler] ObjectMotion saved On, in the settings
+// menu): its capture variant from the vertex source the program cache keeps (NULL: none; asked once).
 static FsrCapProg *capprog_later(Prog *p) {
     if (p->capprog_asked || !p->src_saved) return NULL;
     p->capprog_asked = true;
@@ -2528,7 +2528,6 @@ static FsrCapProg *capprog_later(Prog *p) {
     free(vs);
     return p->fsrcap;
 }
-
 static void progcache_open(void) {
     if (getenv("MHGU_NO_PROGRAM_CACHE") || getenv("MHGU_SAVE_GLSL") || getenv("MHGU_SAVE_MSL") || getenv("MHGU_NO_DISCARD"))
         return;

@@ -30,6 +30,7 @@ static SDL_AtomicInt live_aa;
 // [Upscaler]
 static SDL_AtomicInt live_fsr_sharpness;
 static SDL_AtomicInt live_fsr_reactive;
+static SDL_AtomicInt live_fsr_objmotion, live_fsr_animsurf;
 // [Graphics]
 static SDL_AtomicInt live_draw = {0x3f800000};
 static SDL_AtomicInt live_smooth;
@@ -137,6 +138,8 @@ static void publish_live(const Config *c, bool all) {
         live_hp = c->hp;
         SDL_UnlockSpinlock(&live_hp_lock);
     }
+    if (all || c->fsr_objmotion != saved.fsr_objmotion) SDL_SetAtomicInt(&live_fsr_objmotion, c->fsr_objmotion);
+    if (all || c->fsr_animsurf != saved.fsr_animsurf) SDL_SetAtomicInt(&live_fsr_animsurf, c->fsr_animsurf);
     for (int i = 0; i < BINDS; i++)
         for (int k = 0; k < BIND_KEYS; k++)
             if (all || c->binds[i][k] != saved.binds[i][k]) SDL_SetAtomicInt(&live_binds[i][k], c->binds[i][k]);
@@ -276,6 +279,8 @@ float config_live_hp_village(void) {
 void config_live_display(int *mode, int *width, int *height) {
     *mode = SDL_GetAtomicInt(&live_disp_mode), *width = SDL_GetAtomicInt(&live_disp_w), *height = SDL_GetAtomicInt(&live_disp_h);
 }
+int config_live_fsr_objmotion(void) { return SDL_GetAtomicInt(&live_fsr_objmotion); }
+int config_live_fsr_animsurf(void) { return SDL_GetAtomicInt(&live_fsr_animsurf); }
 int config_live_discord(void) { return SDL_GetAtomicInt(&live_discord); }
 int config_live_discord_hunter(void) { return SDL_GetAtomicInt(&live_discord_hunter); }
 int config_live_share_urgent(void) { return SDL_GetAtomicInt(&live_share_urgent); }

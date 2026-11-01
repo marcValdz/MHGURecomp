@@ -226,6 +226,11 @@ int main(int argc, char **argv) {
     assert(config_save(&fsr_saved,error,sizeof error) && !config_restart_required(&fsr_saved));
     assert(fabsf(config_live_fsr_sharpness()-.2f)<.001f && fabsf(config_live_fsr_reactive()-.5f)<.001f);
     assert(!config_restart_key("Sharpness") && !config_restart_key("Reactive"));
+    assert(!config_live_fsr_objmotion() && !config_live_fsr_animsurf());
+    fsr_saved.fsr_objmotion=1;fsr_saved.fsr_animsurf=1;  // ObjectMotion and AnimSurf: switched at the next FSR frame
+    assert(config_save(&fsr_saved,error,sizeof error) && !config_restart_required(&fsr_saved));
+    assert(config_live_fsr_objmotion() && config_live_fsr_animsurf());
+    assert(!config_restart_key("ObjectMotion") && !config_restart_key("AnimSurf"));
     bad=fsr_saved;bad.fsr_quality=5;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_upscaler=3;assert(!config_save(&bad,error,sizeof error));
     bad=fsr_saved;bad.fsr_sharpness=NAN;assert(!config_save(&bad,error,sizeof error));

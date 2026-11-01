@@ -349,6 +349,10 @@ static void destroy_image(TexBackend *b) {
     b->image = VK_NULL_HANDLE;
     b->mem = VK_NULL_HANDLE;
 }
+void vk_tex_release(TexBackend *b) {
+    destroy_image(b);
+    memset(b, 0, sizeof *b);
+}
 
 // A multisampled image of b's format and size (one level, one layer), in `layout`. NULL: could not be created.
 static TexBackend *ms_image(TexBackend *b, VkFormat format, VkImageAspectFlags aspect, uint32_t samples,

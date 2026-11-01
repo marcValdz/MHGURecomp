@@ -48,7 +48,8 @@ bool vk_s2x_resolved(void);
 // copy of the same draw gives the previous positions (fsr.c "object motion").
 #define FSR_CAP_OUT_BINDING 30   // the variant's bindings (set 0; the translator uses 0-22 and 32+): positions out
 #define FSR_CAP_BASE_BINDING 31  // ivec4 x: added to gl_VertexIndex
-extern bool g_fsr_objvel;        // object motion on and possible (vertexPipelineStoresAndAtomics)
+extern bool g_fsr_objvel;        // object motion on and possible (vertexPipelineStoresAndAtomics); follows [Upscaler]
+                                 // ObjectMotion, switched between frames (fsr.c fsr_live_options)
 
 typedef struct FsrCapProg {
     _Atomic int state;           // 0 not built, 1 building, 2 ready, 3 failed

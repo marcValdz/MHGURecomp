@@ -586,34 +586,13 @@ static bool prep_init(void) {
         LOG("[fsr] the quest rewards' pass could not be set up: their picture stays as the game makes it\n");
         shot_pipe = VK_NULL_HANDLE;
     }
-    if (g_fsr_objvel && !objvel_init()) {
-        LOG("[fsr] object motion could not be set up: camera motion only\n");
-        g_fsr_objvel = false;
-    }
     VmaAllocationCreateInfo host = {.usage = VMA_MEMORY_USAGE_AUTO,
                                     .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
     VmaAllocationInfo info;
     bool want_check = getenv("MHGU_FSR_MVCHECK") != NULL;
-    if ((want_check || g_config.fsr_animsurf) &&
+    if (want_check &&
         !own_image(&img_prev, VK_FORMAT_R8G8B8A8_UNORM, rw, rh, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT))
-        want_check = false, g_config.fsr_animsurf = 0;
-    if (g_config.fsr_animsurf) {
-        static const VkDescriptorType anim_types[] = {
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
-        static const VkDescriptorType bypass_types[] = {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                                        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
-        VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = 32,
-                                 .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
-        uint32_t tw = (rw + 7) / 8, th = (rh + 7) / 8;
-        anim_on = make_compute(ANIM_GLSL, "fsr_animsurf", anim_types, 9, 32, &anim_set_layout, &anim_layout, &anim_pipe) &&
-                  make_compute(BYPASS_GLSL, "fsr_animsurf_bypass", bypass_types, 3, 16, &bypass_set_layout, &bypass_layout, &bypass_pipe) &&
-                  own_image(&img_tile[0], VK_FORMAT_R8G8B8A8_UNORM, tw, th, u) && own_image(&img_tile[1], VK_FORMAT_R8G8B8A8_UNORM, tw, th, u) &&
-                  vmaCreateBuffer(g_vk.vma, &bi, &host, &anim_buf, &anim_mem, &info) == VK_SUCCESS;
-        if (anim_on) anim_sums = info.pMappedData;
-        else LOG("[fsr] animated surfaces could not be set up: off\n");
-    }
+        want_check = false;
     if (want_check) {
         static const VkDescriptorType check_types[] = {
             VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -630,6 +609,49 @@ static bool prep_init(void) {
             LOG("[fsr] motion vector check on (MHGU_FSR_MVCHECK)\n");
         }
     }
+    return true;
+}
+
+// [Upscaler] AnimSurf: its pipelines (made once), tiles, counter buffer and the previous input (img_prev), made when
+// it is turned on and freed when it is turned off (fsr_live_options)
+static bool anim_failed;  // its pipelines could not be made: it stays off
+static void anim_free(void) {
+    vk_tex_release(&img_tile[0]);
+    vk_tex_release(&img_tile[1]);
+    if (!check_pipe) vk_tex_release(&img_prev), prev_in_ok = false;  // ((debug) MHGU_FSR_MVCHECK keeps it)
+    if (anim_buf) vk_defer_buffer(anim_buf, anim_mem);
+    anim_buf = VK_NULL_HANDLE, anim_mem = NULL, anim_sums = NULL;
+    anim_seq = 0, tile_ok = false;
+}
+static bool anim_init(void) {
+    static bool pipes;
+    static const VkDescriptorType anim_types[] = {
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+    static const VkDescriptorType bypass_types[] = {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+    if (!pipes && !(pipes = make_compute(ANIM_GLSL, "fsr_animsurf", anim_types, 9, 32, &anim_set_layout, &anim_layout, &anim_pipe) &&
+                            make_compute(BYPASS_GLSL, "fsr_animsurf_bypass", bypass_types, 3, 16, &bypass_set_layout,
+                                         &bypass_layout, &bypass_pipe))) {
+        anim_failed = true;
+        return false;
+    }
+    VkImageUsageFlags u = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VmaAllocationCreateInfo host = {.usage = VMA_MEMORY_USAGE_AUTO,
+                                    .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
+    VmaAllocationInfo info;
+    VkBufferCreateInfo bi = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = 32,
+                             .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
+    uint32_t tw = (rw + 7) / 8, th = (rh + 7) / 8;
+    bool ok = (img_prev.image ||
+               own_image(&img_prev, VK_FORMAT_R8G8B8A8_UNORM, rw, rh, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT)) &&
+              own_image(&img_tile[0], VK_FORMAT_R8G8B8A8_UNORM, tw, th, u) && own_image(&img_tile[1], VK_FORMAT_R8G8B8A8_UNORM, tw, th, u) &&
+              vmaCreateBuffer(g_vk.vma, &bi, &host, &anim_buf, &anim_mem, &info) == VK_SUCCESS;
+    if (!ok) { anim_free(); return false; }
+    anim_sums = info.pMappedData;
+    tile_ok = false;
     return true;
 }
 
@@ -914,7 +936,22 @@ static VkShaderModule glsl_module(const char *src, int stage, const char *name) 
     return m;
 }
 
-static bool objvel_init(void) {
+// [Upscaler] ObjectMotion turned off (fsr_live_options): its buffers freed once the GPU is done with them, and what the
+// captures noted forgotten, so the next capture after it is turned on again pairs with nothing older
+static void objvel_free(void) {
+    if (cap_buf) vk_defer_buffer(cap_buf, cap_mem);
+    if (idx_buf) vk_defer_buffer(idx_buf, idx_mem);
+    if (flag_buf) vk_defer_buffer(flag_buf, flag_mem);
+    if (flag_rb) vk_defer_buffer(flag_rb, flag_rb_mem);
+    cap_buf = idx_buf = flag_buf = flag_rb = VK_NULL_HANDLE;
+    cap_mem = idx_mem = flag_mem = flag_rb_mem = NULL;
+    idx_map = NULL, flag_map = NULL;
+    ntrk[0] = ntrk[1] = 0, trk_frame[0] = trk_frame[1] = 0;
+    memset(flag_ring, 0, sizeof flag_ring);
+    memset(stat_tab, 0, sizeof stat_tab);
+}
+
+static bool objvel_buffers(void) {
     VmaAllocationCreateInfo dev = {.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE};
     VmaAllocationCreateInfo host = {.usage = VMA_MEMORY_USAGE_AUTO,
                                     .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT};
@@ -934,6 +971,14 @@ static bool objvel_init(void) {
     bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     if (vmaCreateBuffer(g_vk.vma, &bi, &host, &flag_rb, &flag_rb_mem, &info) != VK_SUCCESS) return false;
     flag_map = info.pMappedData;
+    return true;
+}
+
+// Its buffers (again after objvel_free) and its pipelines (once). false: object motion stays off.
+static bool objvel_init(void) {
+    static bool pipes;
+    if (!objvel_buffers()) { objvel_free(); return false; }
+    if (pipes) return true;
     VkDescriptorSetLayoutBinding b[4] = {
         {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT, NULL},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL},
@@ -946,7 +991,7 @@ static bool objvel_init(void) {
                                      .pSetLayouts = &vel_set_layout, .pushConstantRangeCount = 1, .pPushConstantRanges = &pr};
     VK_CHECK(vkCreatePipelineLayout(g_vk.dev, &pi, NULL, &vel_layout));
     VkShaderModule vs = glsl_module(VEL_VS, STAGE_VERTEX, "fsr_vel_vs"), fs = glsl_module(VEL_FS, STAGE_FRAGMENT, "fsr_vel_fs");
-    if (!vs || !fs) return false;
+    if (!vs || !fs) { objvel_free(); return false; }
     VkFormat f = img_vel.format;
     vel_rp = vk_render_pass(&f, 1, VK_FORMAT_UNDEFINED, 1);
     VkPipelineShaderStageCreateInfo st[2] = {
@@ -979,7 +1024,8 @@ static bool objvel_init(void) {
         }
     vkDestroyShaderModule(g_vk.dev, vs, NULL);
     vkDestroyShaderModule(g_vk.dev, fs, NULL);
-    return ok;
+    if (!ok) objvel_free();
+    return pipes = ok;
 }
 
 // ---- the capture variant of a vertex shader, and its pipelines (built on the shader threads; draws are captured
@@ -1949,10 +1995,32 @@ bool vk_s2x_target(TexBackend *b, int *phase) {
 
 void vk_s2x_done(void) { s2x_frame = true; }
 bool vk_s2x_resolved(void) { return frame_open && s2x_frame; }
-
+// [Upscaler] ObjectMotion and AnimSurf as they are now (a Save in the settings menu), switched between two frames: what
+// each needs is made the first time it is wanted and freed when it is turned off. quiet: at start-up (no [live] line).
+static bool objvel_gpu;     // the GPU can capture positions (vertexPipelineStoresAndAtomics, fragmentStoresAndAtomics)
+static bool objvel_failed;  // its buffers or pipelines could not be made: it stays off
+static void fsr_live_options(bool quiet) {
+    bool anim = config_live_fsr_animsurf() && !anim_failed;
+    if (anim != anim_on) {
+        uint64_t t0 = plat_now_ns();
+        if (anim) anim_on = anim_init();
+        else anim_free(), anim_on = false;
+        if (anim && !anim_on) LOG("[fsr] animated surfaces could not be set up: off\n");
+        else if (!quiet) LOG("[live] FSR animated surfaces %s (%.1f ms)\n", anim_on ? "on" : "off", (plat_now_ns() - t0) / 1e6);
+    }
+    bool objv = objvel_gpu && config_live_fsr_objmotion() && !objvel_failed;
+    if (objv != g_fsr_objvel) {
+        uint64_t t0 = plat_now_ns();
+        if (objv) objvel_failed = !(g_fsr_objvel = objvel_init());
+        else objvel_free(), g_fsr_objvel = false;
+        if (objvel_failed) LOG("[fsr] object motion could not be set up: camera motion only\n");
+        else if (!quiet) LOG("[live] FSR object motion %s (%.1f ms)\n", g_fsr_objvel ? "on" : "off", (plat_now_ns() - t0) / 1e6);
+    }
+}
 NvnTexture *vk_fsr_present(NvnTexture *t) {
     s2x_present();  // (before T2x's: from T2x / 4x to S2x, this frame's count is still there)
     if (!g_fsr_on && !t2x_present()) return t;
+    if (g_fsr_on) fsr_live_options(false);
     NvnTexture *show = t;
     if (redirect) {
         if (t == g_h) show = &st_h.fake;
@@ -2072,15 +2140,14 @@ void vk_fsr_init(void) {
             "format): FSR off, the picture is scaled from %ux%u\n", rw, rh);
         return;
     }
-    if (g_config.fsr_objmotion) {  // (device.c enables both where the GPU has them)
-        VkPhysicalDeviceFeatures f;
-        vkGetPhysicalDeviceFeatures(g_vk.phys, &f);
-        g_fsr_objvel = f.vertexPipelineStoresAndAtomics && f.fragmentStoresAndAtomics;
-        if (!g_fsr_objvel)
-            LOG("[fsr] object motion needs vertexPipelineStoresAndAtomics and fragmentStoresAndAtomics, which this GPU lacks: "
-                "camera motion only (the reactive mask still covers moving objects)\n");
-    }
-    if (!prep_init()) { LOG("[fsr] the prep shader could not be built: FSR off\n"); g_fsr_objvel = false; return; }
+    VkPhysicalDeviceFeatures f;  // (device.c enables both where the GPU has them)
+    vkGetPhysicalDeviceFeatures(g_vk.phys, &f);
+    objvel_gpu = f.vertexPipelineStoresAndAtomics && f.fragmentStoresAndAtomics;
+    if (!objvel_gpu)
+        LOG("[fsr] object motion needs vertexPipelineStoresAndAtomics and fragmentStoresAndAtomics, which this GPU lacks: "
+            "camera motion only (the reactive mask still covers moving objects)\n");
+    if (!prep_init()) { LOG("[fsr] the prep shader could not be built: FSR off\n"); return; }
+    fsr_live_options(true);
     g_fsr_on = g_temporal_on = true;
     camjit_set(false, rw, rh, 8);
     if (g_config.fsr_upscaler >= FSR_UP_4) {

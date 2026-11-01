@@ -189,6 +189,7 @@ void vk_defer_view(VkImageView v);
 void vk_defer_framebuffer(VkFramebuffer f);
 void vk_defer_buffer(VkBuffer b, VmaAllocation mem);
 void vk_collect_dead(void);
+void vk_tex_release(TexBackend *b);  // an image of the runtime's own (fsr.c) and its views, deferred; b zeroed
 void vk_views_forget(TexBackend *b);  // drop (deferred) the cached views of an image being replaced
 uint64_t vk_frame_counter(void);
 // Guest memory [addr, addr + size) (guest addresses) changed since generation `since`? 0 no, 1 yes, -1 unknown.
