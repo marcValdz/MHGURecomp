@@ -2179,6 +2179,7 @@ void vk_fsr_init(void) {
             "camera motion only (the reactive mask still covers moving objects)\n");
     if (!prep_init()) { LOG("[fsr] the prep shader could not be built: FSR off\n"); return; }
     fsr_live_options(true);
+    vk_set_lod_bias(g_fsr_lod_bias);  // textures as sharp as at the output size (config.c)
     g_fsr_on = g_temporal_on = true;
     camjit_set(false, rw, rh, 8);
     LOG("[fsr] on (%s): %ux%u -> %ux%u, sharpness %.2f, fp16 %d, object motion %s, reactive %.2f\n",

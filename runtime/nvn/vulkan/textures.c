@@ -218,7 +218,7 @@ void vk_image_init_layout(VkCommandBuffer cb, VkImage img, VkImageAspectFlags as
 }
 
 // Objects destroyed by the guest (or replaced) are kept until the submissions that may use them have completed.
-typedef struct { VkImage img; VmaAllocation mem; VkImageView view; VkFramebuffer fb; VkBuffer buf; uint64_t seq; } Dead;
+typedef struct { VkImage img; VmaAllocation mem; VkImageView view; VkFramebuffer fb; VkBuffer buf; VkSampler smp; uint64_t seq; } Dead;
 static Dead *dead;
 static int ndead, cap_dead;
 static void views_forget(TexBackend *b);
@@ -229,6 +229,7 @@ void vk_collect_dead(void) {
     for (int i = 0; i < ndead; i++) {
         if (dead[i].seq > done) { dead[k++] = dead[i]; continue; }
         if (dead[i].fb) vkDestroyFramebuffer(g_vk.dev, dead[i].fb, NULL);
+        else if (dead[i].smp) vkDestroySampler(g_vk.dev, dead[i].smp, NULL);
         else if (dead[i].buf) vmaDestroyBuffer(g_vk.vma, dead[i].buf, dead[i].mem);
         else if (dead[i].view) vkDestroyImageView(g_vk.dev, dead[i].view, NULL);
         else vmaDestroyImage(g_vk.vma, dead[i].img, dead[i].mem);
@@ -835,6 +836,27 @@ static VkCompareOp compare_op(uint32_t f) {
     }
 }
 
+// The texture LOD bias added to mipmapped samplers: FSR's while it runs (log2(render / output), config.c g_fsr_lod_bias:
+// textures as sharp as at the output size), else 0. Samplers are made once per sampler-pool entry and kept in it
+// (vk_sampler), so a new bias destroys them all (deferred until the GPU is done with them: descriptor sets are written
+// per draw) and the next draws make them again with it. (render thread, under vk_lock: fsr.c vk_fsr_follow)
+static float lod_bias;
+void vk_set_lod_bias(float bias) {
+    if (bias == lod_bias) return;
+    uint64_t t0 = plat_now_ns();
+    extern NvnDescPool *g_sampler_pools[64];
+    int n = 0;
+    for (int p = 0; p < 64 && g_sampler_pools[p]; p++) {
+        NvnSamplerDesc *e = g_sampler_pools[p]->entries;
+        for (int i = 0; i < g_sampler_pools[p]->count; i++)
+            if (e[i].backend) defer((Dead){.smp = (VkSampler)e[i].backend}), e[i].backend = NULL, n++;
+    }
+    if (n) LOG("[live] texture LOD bias %.2f -> %.2f: %d samplers made again at their next use (%.1f ms)\n", lod_bias, bias,
+               n, (plat_now_ns() - t0) / 1e6);
+    else LOG("[vk] texture LOD bias %.2f\n", bias);
+    lod_bias = bias;
+}
+
 VkSampler vk_sampler(NvnSamplerDesc *d) {
     if (d->backend) return (VkSampler)d->backend;
     VkSamplerCreateInfo si = {.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -860,7 +882,7 @@ VkSampler vk_sampler(NvnSamplerDesc *d) {
     if (mf <= 1) si.maxLod = si.minLod + 0.25f;  // not mipmapped: stay on the base level
     if (si.maxLod < si.minLod) si.maxLod = si.minLod;
     si.mipLodBias = d->lod_bias;
-    if (mf > 1) si.mipLodBias += g_fsr_lod_bias;  // (FSR: textures as sharp as at the output size; config.c)
+    if (mf > 1) si.mipLodBias += lod_bias;  // (FSR: textures as sharp as at the output size; vk_set_lod_bias)
     const char *force = getenv("MHGU_TEX_LOD");  // (debug) mipmapped samplers: only this level (shows mip contents)
     if (force && mf > 1) { si.minLod = si.maxLod = (float)atof(force); si.mipLodBias = 0; }
     if (d->max_aniso > 1) { si.anisotropyEnable = VK_TRUE; si.maxAnisotropy = fminf(d->max_aniso, 16); }

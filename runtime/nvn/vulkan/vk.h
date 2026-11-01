@@ -181,6 +181,7 @@ TexBackend *vk_tex_ms(TexBackend *b, uint32_t samples);  // b's multisampled com
 TexBackend *vk_tex_ms_readable(TexBackend *m);  // a sampled copy for its resolve
 void vk_ms_resolve(TexBackend *b);  // (exec.c) b up to date with its multisampled companion before b is read
 VkSampler vk_sampler(NvnSamplerDesc *d);
+void vk_set_lod_bias(float bias);  // mipmapped samplers' added LOD bias (FSR's, else 0): cached samplers made again
 VkSampler vk_default_sampler(bool linear);
 void vk_image_init_layout(VkCommandBuffer cb, VkImage img, VkImageAspectFlags aspect);
 // Destruction once every submission that may use the object has completed.
