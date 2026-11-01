@@ -17,7 +17,8 @@
 #endif
 
 static Config saved, startup;
-static bool have_saved, runtime_ready, runtime_fsr, runtime_fsr4;  // (runtime_fsr4: the device was made for FSR 4)
+static bool have_saved, runtime_ready, runtime_fsr4;  // (runtime_fsr4: the device was made for FSR 4)
+static SDL_AtomicInt fsr_running;  // the renderer's FSR is on now (nvn/vulkan/fsr.c config_fsr_running): MSAA / FXAA off
 static SDL_AtomicInt window_focused = {1};
 // [Display]
 static SDL_AtomicInt live_fov;
@@ -30,7 +31,7 @@ static SDL_AtomicInt live_aa;
 // [Upscaler]
 static SDL_AtomicInt live_fsr_sharpness;
 static SDL_AtomicInt live_fsr_reactive;
-static SDL_AtomicInt live_fsr_objmotion, live_fsr_animsurf, live_fsr_upscaler;
+static SDL_AtomicInt live_fsr_objmotion, live_fsr_animsurf, live_fsr_upscaler, live_fsr;
 // [Graphics]
 static SDL_AtomicInt live_draw = {0x3f800000};
 static SDL_AtomicInt live_smooth;
@@ -141,6 +142,7 @@ static void publish_live(const Config *c, bool all) {
     if (all || c->fsr_objmotion != saved.fsr_objmotion) SDL_SetAtomicInt(&live_fsr_objmotion, c->fsr_objmotion);
     if (all || c->fsr_animsurf != saved.fsr_animsurf) SDL_SetAtomicInt(&live_fsr_animsurf, c->fsr_animsurf);
     if (all || c->fsr_upscaler != saved.fsr_upscaler) SDL_SetAtomicInt(&live_fsr_upscaler, c->fsr_upscaler);
+    if (all || c->fsr != saved.fsr) SDL_SetAtomicInt(&live_fsr, c->fsr);
     for (int i = 0; i < BINDS; i++)
         for (int k = 0; k < BIND_KEYS; k++)
             if (all || c->binds[i][k] != saved.binds[i][k]) SDL_SetAtomicInt(&live_binds[i][k], c->binds[i][k]);
@@ -207,7 +209,7 @@ void config_store_loaded(const Config *c) {
     SDL_SetAtomicInt(&show_battery, c->show_battery);
 }
 void config_runtime_init(const Config *effective) {
-    startup = saved; runtime_ready = true; runtime_fsr = effective->fsr != 0;
+    startup = saved; runtime_ready = true; SDL_SetAtomicInt(&fsr_running, effective->fsr != 0);
     runtime_fsr4 = effective->fsr && effective->fsr_upscaler >= FSR_UP_4;
     publish_live(effective, true);
     const char *override = getenv("MHGU_FRAMERATE");
@@ -223,10 +225,12 @@ void config_set_live_fps(float f) { set_float(&live_fps, f < 30 ? 30 : f > 240 ?
 float config_live_fov(void) { return get_float(&live_fov); }
 float config_live_mouse_sensitivity(void) { return get_float(&live_mouse); }
 float config_live_draw_distance(void) { return get_float(&live_draw); }
-int config_live_fxaa(void) { return runtime_fsr ? 0 : SDL_GetAtomicInt(&live_fxaa); }
+int config_live_fxaa(void) { return SDL_GetAtomicInt(&fsr_running) ? 0 : SDL_GetAtomicInt(&live_fxaa); }
 int config_live_msaa(void) {  // (SMAA S2x / 4x: MSAA 2x whatever MSAA says)
-    return runtime_fsr ? 1 : AA_USES_S2X(SDL_GetAtomicInt(&live_aa)) ? 2 : SDL_GetAtomicInt(&live_msaa);
+    return SDL_GetAtomicInt(&fsr_running) ? 1 : AA_USES_S2X(SDL_GetAtomicInt(&live_aa)) ? 2 : SDL_GetAtomicInt(&live_msaa);
 }
+int config_live_fsr(void) { return SDL_GetAtomicInt(&live_fsr); }
+void config_fsr_running(bool on) { SDL_SetAtomicInt(&fsr_running, on); }
 int config_live_vsync(void) { return SDL_GetAtomicInt(&live_vsync); }
 int config_live_menu_confirm(void) { return SDL_GetAtomicInt(&live_menu_confirm); }
 int config_live_face_buttons(void) { return SDL_GetAtomicInt(&live_face); }
@@ -300,7 +304,7 @@ int config_live_bind(int bind, int slot) {
 }
 bool config_mod_bound(int bind) { return SDL_GetAtomicInt(&mod_bind_set[bind]) != 0; }
 int config_player_bind(int bind, int slot) { return SDL_GetAtomicInt(&live_binds[bind][slot]); }
-int config_live_aa(void) { return runtime_fsr ? AA_FXAA : SDL_GetAtomicInt(&live_aa); }
+int config_live_aa(void) { return SDL_GetAtomicInt(&fsr_running) ? AA_FXAA : SDL_GetAtomicInt(&live_aa); }
 void config_live_ldn(char *server, size_t server_size, char *key, size_t key_size) {
     SDL_LockSpinlock(&live_ldn_lock);
     if (server) SDL_strlcpy(server, live_ldn_server, server_size);

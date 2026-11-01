@@ -15,7 +15,8 @@ typedef struct {
     uint32_t cam;              // the camera object (guest address)
 } CamRecord;
 
-void camjit_init(void);  // hooks (the jitter stays off until FSR or SMAA T2x turns it on)
+void camjit_init(void);  // the screenshot-buffers hook; the camera hooks are set while FSR or SMAA T2x wants them
+void camjit_capture(bool on);  // renderer: FSR is on / off now (camera hooked and recorded while it or SMAA T2x runs)
 // Renderer: jitter on or off from the next capture on, the 3D render size and the Halton sequence's length.
 void camjit_set(bool on, uint32_t render_w, uint32_t render_h, uint32_t phases);
 // SMAA T2x's two jitters (a quarter pixel right and down, then left and up, a frame each) in place of the Halton

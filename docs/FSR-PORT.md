@@ -3,7 +3,9 @@
 AMD FidelityFX Super Resolution 3.1 (the FSR 3.1.4 temporal upscaler, Vulkan, from the FidelityFX SDK 1.1.4) in the
 Vulkan renderer. With `[Upscaler] FSR = On` the game renders its 3D picture at a lower resolution, FSR rebuilds it at
 full resolution from several jittered frames (and anti-aliases it), and the HUD is drawn at full resolution on top.
-Default: Off. With FSR off nothing of it runs (every hook point is behind `g_fsr_on` / `g_config.fsr`).
+Default: Off. With FSR off nothing of it runs (every hook point is behind `g_fsr_on`; the camera hooks are always set
+and pass straight to the game's functions). It is switched on and off between frames from the settings menu
+(fsr.c `vk_fsr_follow`, at the render size of start-up).
 
 ## What works (checked in game, RX 9070 XT, Windows, 1920x1080 window unless noted)
 

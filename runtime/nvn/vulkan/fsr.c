@@ -109,10 +109,14 @@ static TexBackend *stand_image(NvnTexture *of, uint32_t w, uint32_t h, bool stor
     return b;
 }
 
-// The stand-in of `of` at w x h (made, or remade when `of` is another kind of texture than before).
+// The stand-in of `of` at w x h (made, or remade when `of` is another kind of texture than before, or its image has
+// another format: SmoothGradients widens the full-screen image to RGBA16 UNORM for the frames FSR has not learnt it
+// yet - after FSR is switched or remade at new sizes - and narrows it again once it has, textures.c vk_rt_widen).
 static NvnTexture *stand(Stand *s, NvnTexture *of, uint32_t w, uint32_t h, bool storage) {
     if (!of->backend) return NULL;
-    if (s->fake.backend && s->fmt == of->format && s->w == of->width && s->h == of->height) return &s->fake;
+    if (s->fake.backend && s->fmt == of->format && s->w == of->width && s->h == of->height &&
+        ((TexBackend *)s->fake.backend)->format == ((TexBackend *)of->backend)->format)
+        return &s->fake;
     if (s->fake.backend) {
         TexBackend *old = s->fake.backend;
         vk_views_forget(old);
@@ -564,21 +568,35 @@ static uint64_t anim_seq, anim_acc[4], anim_frames;
 
 static bool objvel_init(void);
 
+// The prep / finish / quest-rewards pipelines (once: prep_pipes) and the render-size images (each time FSR is turned
+// on; freed by prep_free when it is turned off, vk_fsr_follow). false: FSR cannot run.
+static bool prep_pipes(void);
+static void prep_free(void) {
+    TexBackend *imgs[] = {&img_depth, &img_mv, &img_mvf, &img_react, &img_sil[0], &img_sil[1], &img_vel, &img_shot};
+    for (size_t i = 0; i < sizeof imgs / sizeof imgs[0]; i++) vk_tex_release(imgs[i]);
+}
 static bool prep_init(void) {
+    static int pipes;  // 1 made, -1 could not be made
+    if (!pipes) pipes = prep_pipes() ? 1 : -1;
+    VkImageUsageFlags u = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (pipes > 0 && own_image(&img_depth, VK_FORMAT_R32_SFLOAT, rw, rh, u) && own_image(&img_mv, VK_FORMAT_R32G32_SFLOAT, rw, rh, u) &&
+        own_image(&img_mvf, VK_FORMAT_R32G32_SFLOAT, rw, rh, u) && own_image(&img_react, VK_FORMAT_R32_SFLOAT, rw, rh, u) &&
+        own_image(&img_sil[0], VK_FORMAT_R32_SFLOAT, rw, rh, u) && own_image(&img_sil[1], VK_FORMAT_R32_SFLOAT, rw, rh, u) &&
+        own_image(&img_vel, VK_FORMAT_R16G16B16A16_SFLOAT, rw, rh, u | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+        return true;
+    prep_free();
+    return false;
+}
+static bool prep_pipes(void) {
     static const VkDescriptorType prep_types[] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                                                   VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
     static const VkDescriptorType finish_types[] = {
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
-    VkImageUsageFlags u = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                          VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (!make_compute(PREP_GLSL, "fsr_prep", prep_types, 3, 80, &prep_set_layout, &prep_layout, &prep_pipe) ||
-        !make_compute(FINISH_GLSL, "fsr_finish", finish_types, 8, 16, &finish_set_layout, &finish_layout, &finish_pipe) ||
-        !own_image(&img_depth, VK_FORMAT_R32_SFLOAT, rw, rh, u) || !own_image(&img_mv, VK_FORMAT_R32G32_SFLOAT, rw, rh, u) ||
-        !own_image(&img_mvf, VK_FORMAT_R32G32_SFLOAT, rw, rh, u) || !own_image(&img_react, VK_FORMAT_R32_SFLOAT, rw, rh, u) ||
-        !own_image(&img_sil[0], VK_FORMAT_R32_SFLOAT, rw, rh, u) || !own_image(&img_sil[1], VK_FORMAT_R32_SFLOAT, rw, rh, u) ||
-        !own_image(&img_vel, VK_FORMAT_R16G16B16A16_SFLOAT, rw, rh, u | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT))
+        !make_compute(FINISH_GLSL, "fsr_finish", finish_types, 8, 16, &finish_set_layout, &finish_layout, &finish_pipe))
         return false;
     static const VkDescriptorType shot_types[] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                                   VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE};
@@ -2007,6 +2025,7 @@ bool vk_s2x_resolved(void) { return frame_open && s2x_frame; }
 // each needs is made the first time it is wanted and freed when it is turned off. quiet: at start-up (no [live] line).
 static bool objvel_gpu;     // the GPU can capture positions (vertexPipelineStoresAndAtomics, fragmentStoresAndAtomics)
 static bool objvel_failed;  // its buffers or pipelines could not be made: it stays off
+static int upscaler = -1;   // the Upscaler in use (-1: none yet, or FSR was turned off)
 static void fsr_live_options(bool quiet) {
     bool anim = config_live_fsr_animsurf() && !anim_failed;
     if (anim != anim_on) {
@@ -2159,30 +2178,85 @@ NvnTexture *vk_fsr_present(NvnTexture *t) {
     return show;
 }
 
-void vk_fsr_init(void) {
-    if (!g_config.fsr || !g_fsr_output[0]) return;
-    rw = g_render_size[0], rh = g_render_size[1], ow = g_fsr_output[0], oh = g_fsr_output[1];
-    logging = getenv("MHGU_FSR_LOG") != NULL;
-    if (g_vk.api11) { LOG("[fsr] FSR 3.1 needs Vulkan 1.2: FSR off, the picture is scaled from %ux%u\n", rw, rh); return; }
-    FfxVkPortableDeviceCapabilities caps = {.structSize = sizeof caps};
-    if (ffxVkPortableQueryDeviceCapabilities(g_vk.phys, &caps) != FFX_VK_PORTABLE_OK || !caps.fsr3ComputePrerequisites ||
-        !g_vk.fsr_storage_wo_format) {
+// [Upscaler] FSR turned on (vk_fsr_follow): its images, the options' resources, the cameras recorded. false: it cannot
+// run here (logged).
+static bool gpu_ok;    // the GPU has what FSR 3.1 needs (vk_fsr_init)
+static bool fsr_start(void) {
+    if (g_vk.api11) { LOG("[fsr] FSR 3.1 needs Vulkan 1.2: FSR off, the picture is scaled from %ux%u\n", rw, rh); return false; }
+    if (!gpu_ok) {
         LOG("[fsr] this GPU lacks what FSR 3.1 needs (subgroup operations, storage formats, storage writes without a "
             "format): FSR off, the picture is scaled from %ux%u\n", rw, rh);
-        return;
+        return false;
     }
+    if (!prep_init()) { LOG("[fsr] the prep shader or its images could not be made: FSR off\n"); return false; }
+    fsr_live_options(true);
+    camjit_set(false, rw, rh, 8);
+    camjit_capture(true);
+    // textures as sharp as at the output size: log2(render / output) (config.c; MHGU_FSR_LODBIAS: the start-up value)
+    vk_set_lod_bias(getenv("MHGU_FSR_LODBIAS") ? g_fsr_lod_bias : rw == ow ? 0.0f : log2f((float)rw / (float)ow));
+    g_fsr_on = g_temporal_on = true;
+    LOG("[fsr] on (%s): %ux%u -> %ux%u, sharpness %.2f, fp16 %d, object motion %s, reactive %.2f\n",
+        use_fsr4 ? vk_fsr4_name() : "FSR 3.1", rw, rh, ow, oh, config_live_fsr_sharpness(), g_vk.fsr_fp16,
+        g_fsr_objvel ? "on" : "off", config_live_fsr_reactive());
+    return true;
+}
+
+// [Upscaler] FSR turned off (vk_fsr_follow, after the present of its last frame): everything it made is freed (images
+// deferred until the GPU is done with them; its context once the GPU is idle), the jitter stops, and the next start
+// begins with no history. Its pipelines stay (small).
+static void fsr_stop(void) {
+    g_fsr_on = false;
+    g_temporal_on = t2x_on;
+    t2x_ready = false;  // (SMAA T2x shares the prep pass freed here: made again the next time it is picked)
+    camjit_capture(false);
+    vk_set_lod_bias(0.0f);
+    jitter_on = false;
+    anim_free(), anim_on = false;
+    objvel_free(), g_fsr_objvel = false;
+    ctx_drop();
+    vk_fsr4_drop();
+    use_fsr4 = false, upscaler = -1;
+    prep_free();
+    Stand *st[] = {&st_h, &st_p, &st_d};
+    for (int i = 0; i < 3; i++) {
+        if (!st[i]->fake.backend) continue;
+        vk_tex_release(st[i]->fake.backend);
+        free(st[i]->fake.backend);
+        st[i]->fake.backend = NULL;
+        st[i]->fmt = st[i]->w = st[i]->h = 0;
+    }
+    g_h = last_target = last_src = shot_taken = NULL;
+    frame_open = redirect = frame_fsr = false;
+    prev_cam.seq = 0, sil_ok = prev_in_ok = tile_ok = false;
+    not_scene = 0, menu_models_late = menu_cams_late = 0;
+}
+
+// [Upscaler] FSR as saved now (a Save in the settings menu), switched between two frames: device.c backend_present,
+// under vk_lock, after the present, at the sizes of start-up (FSR off at start-up: Native AA at the render size).
+static bool fsr_failed;  // it could not start: not tried again
+void vk_fsr_follow(void) {
+    bool want = config_live_fsr() && !fsr_failed;
+    if (want == g_fsr_on) return;
+    uint64_t t0 = plat_now_ns();
+    if (want) fsr_failed = !fsr_start();
+    else fsr_stop();
+    config_fsr_running(g_fsr_on);
+    if (!fsr_failed) LOG("[live] FSR %s (%.1f ms)\n", g_fsr_on ? "on" : "off", (plat_now_ns() - t0) / 1e6);
+}
+
+void vk_fsr_init(void) {
+    rw = g_render_size[0], rh = g_render_size[1];
+    ow = g_fsr_output[0] ? g_fsr_output[0] : rw, oh = g_fsr_output[0] ? g_fsr_output[1] : rh;  // (FSR off at start-up)
+    logging = getenv("MHGU_FSR_LOG") != NULL;
+    FfxVkPortableDeviceCapabilities caps = {.structSize = sizeof caps};
+    gpu_ok = ffxVkPortableQueryDeviceCapabilities(g_vk.phys, &caps) == FFX_VK_PORTABLE_OK && caps.fsr3ComputePrerequisites &&
+             g_vk.fsr_storage_wo_format;
     VkPhysicalDeviceFeatures f;  // (device.c enables both where the GPU has them)
     vkGetPhysicalDeviceFeatures(g_vk.phys, &f);
     objvel_gpu = f.vertexPipelineStoresAndAtomics && f.fragmentStoresAndAtomics;
-    if (!objvel_gpu)
+    if (!objvel_gpu && gpu_ok)
         LOG("[fsr] object motion needs vertexPipelineStoresAndAtomics and fragmentStoresAndAtomics, which this GPU lacks: "
             "camera motion only (the reactive mask still covers moving objects)\n");
-    if (!prep_init()) { LOG("[fsr] the prep shader could not be built: FSR off\n"); return; }
-    fsr_live_options(true);
-    vk_set_lod_bias(g_fsr_lod_bias);  // textures as sharp as at the output size (config.c)
-    g_fsr_on = g_temporal_on = true;
-    camjit_set(false, rw, rh, 8);
-    LOG("[fsr] on (%s): %ux%u -> %ux%u, sharpness %.2f, fp16 %d, object motion %s, reactive %.2f\n",
-        use_fsr4 ? vk_fsr4_name() : "FSR 3.1", rw, rh, ow, oh, g_config.fsr_sharpness, g_vk.fsr_fp16, g_fsr_objvel ? "on" : "off",
-        g_config.fsr_reactive);
+    if (config_live_fsr()) fsr_failed = !fsr_start();
+    config_fsr_running(g_fsr_on);
 }

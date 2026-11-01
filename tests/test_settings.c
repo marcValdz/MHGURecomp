@@ -152,11 +152,11 @@ int main(int argc, char **argv) {
     assert(config_live_fps()==120 && config_live_msaa()==4 && config_live_face_buttons()==FACE_LABEL);
     assert(config_restart_key("RenderResolution") && !config_restart_key("FOV"));
     assert(!config_restart_key("MSAA") && !config_restart_key("VSync") && !config_restart_key("FaceButtons"));
-    // The window's mode and size are live (ui.c display_follow)
-    assert(!config_restart_key("Mode") && !config_restart_key("Resolution"));
+    // The window's mode and size and FSR on / off are live (ui.c display_follow, fsr.c vk_fsr_follow)
+    assert(!config_restart_key("Mode") && !config_restart_key("Resolution") && !config_restart_key("FSR"));
     Config d = loaded;
     d.display_mode = loaded.display_mode == DISPLAY_WINDOWED ? DISPLAY_BORDERLESS : DISPLAY_WINDOWED;
-    d.width = 2560; d.height = 1440;
+    d.width = 2560; d.height = 1440; d.fsr = !loaded.fsr;
     assert(!config_restart_required(&d));
     assert(config_restart_key("framerate") == config_restart_key("FPS") && !config_restart_key("NoSuchKey"));
     // The menu's help: the default ini's comments, wrapped lines joined, the default last (none when empty)
@@ -209,7 +209,7 @@ int main(int argc, char **argv) {
     fsr_config.fsr=1;fsr_config.fsr_upscaler=FSR_UP_4;fsr_config.fsr_quality=FSR_BALANCED;
     fsr_config.fsr_sharpness=.65f;fsr_config.fsr_objmotion=0;fsr_config.fsr_reactive=.35f;fsr_config.fsr_animsurf=0;
     fsr_config.msaa=8;fsr_config.fxaa=1;
-    assert(config_save(&fsr_config,error,sizeof error));assert(config_restart_required(&fsr_config));
+    assert(config_save(&fsr_config,error,sizeof error));assert(config_restart_required(&fsr_config));  // (FSRQuality)
     text = read_file(path);
     assert(strstr(text, "Sharpness = 0.65\r\n") && strstr(text, "Reactive = 0.35\r\n") && strstr(text, "Upscaler = FSR4\r\n"));
     free(text);
@@ -252,8 +252,10 @@ int main(int argc, char **argv) {
         g_config=initial;config_load();assert(config_editable().fsr_quality==quality);
         assert(config_editable().hp.quests==HP_QUESTS_MAX && config_editable().hp.quest[255].quest==50255);
     }
-    fsr_saved.fsr=0;assert(config_save(&fsr_saved,error,sizeof error));
-    assert(config_live_msaa()==1 && config_live_fxaa()==0); // Remains active until restart.
+    fsr_saved.fsr=0;assert(config_save(&fsr_saved,error,sizeof error) && !config_live_fsr());
+    assert(config_live_msaa()==1 && config_live_fxaa()==0); // Until the renderer has turned FSR off (fsr.c vk_fsr_follow),
+    config_fsr_running(false);                              // then the saved MSAA and FXAA again
+    assert(config_live_msaa()==8 && config_live_fxaa()==1);
     g_config=initial;config_load();assert(config_live_msaa()==8 && config_live_fxaa()==1);
     // [Keybinds]: SDL's key names, the mouse's, Comma for ','; up to two or None; the recomp's own keys refused
     Config keys = config_editable();

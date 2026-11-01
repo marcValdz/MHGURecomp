@@ -1,7 +1,8 @@
 // The main 3D camera for the FSR upscaler and SMAA T2x (runtime/nvn/vulkan/fsr.c): its matrices, captured per frame
 // for the camera motion vectors, and the sub-pixel jitter put into its projection, which they need to rebuild detail
-// from several frames (FSR: a Halton sequence; SMAA T2x: its two quarter-pixel positions). The hooks are always in
-// (SMAA T2x can be picked at any time); without jitter they only record the camera.
+// from several frames (FSR: a Halton sequence; SMAA T2x: its two quarter-pixel positions). The camera hooks are set
+// only while the renderer's FSR or SMAA T2x runs (capture_follow: both are switched while the game runs, fsr.c) or
+// with the test option below: otherwise the game's camera functions run as upstream's.
 //
 // The game's camera (an sCamera / uCamera object: +0x30 far, +0x34 near, +0x38 aspect, +0x3c vertical field of view
 // in degrees, +0x40 eye, +0x50 up, +0x60 target) gets its matrices from two small functions:
@@ -60,6 +61,7 @@ static int g_nviews;
 static bool g_on;                   // jitter (renderer: FSR or SMAA T2x active on scene frames)
 static bool g_t2x;                  // SMAA T2x's two jitters instead of the Halton sequence
 static bool g_4x;                   // .. at SMAA 4x's half size
+static _Atomic bool g_capture;      // record cameras (renderer: FSR or SMAA T2x on; capture_follow)
 static uint32_t g_rw = 1920, g_rh = 1080, g_phases = 8;
 static bool g_test;                 // MHGU_JITTER_TEST
 static float g_test_xy[2];
@@ -139,6 +141,7 @@ void camjit_menu_viewport(int i, float w, float h) {
 static void lookat_at(Cpu *c, uint32_t fn) {
     uint32_t out = c->r[0], cam = c->r[1];
     fnhook_call_original(c, fn);
+    if (!g_capture) return;
     if (!readable(out, 64) || !readable(cam, 0x70) || !main_aspect(LDF(cam + CAM_ASPECT))) return;
     pthread_mutex_lock(&g_lock);
     int i = 0;
@@ -155,6 +158,7 @@ static void lookat_at(Cpu *c, uint32_t fn) {
 static void projection_at(Cpu *c, uint32_t fn) {
     uint32_t out = c->r[0], cam = c->r[1];
     fnhook_call_original(c, fn);
+    if (!g_capture) return;
     if (!readable(out, 64) || !readable(cam, 0x70)) return;
     if (!main_aspect(LDF(cam + CAM_ASPECT))) { menu_projection(out, cam); return; }
     float m[16];
@@ -203,14 +207,46 @@ void camjit_set(bool on, uint32_t render_w, uint32_t render_h, uint32_t phases) 
     pthread_mutex_unlock(&g_lock);
 }
 
+static void capture_follow(void);
 void camjit_t2x(bool on, bool smaa4x) {
     pthread_mutex_lock(&g_lock);
     g_t2x = on, g_4x = smaa4x;
     pthread_mutex_unlock(&g_lock);
+    capture_follow();
 }
 
 int camjit_t2x_phase(const float jitter[2]) { return jitter[0] < 0.0f; }
+// The four camera hooks (registered once: camjit_init) set only while they are wanted. Unhooked, the game's camera
+// functions run as upstream's; a game thread in a detour as it is unhooked just finishes that call.
+static uint32_t d_lookat, d_projection, d_event_lookat, d_event_projection;
+static void camera_hooks(bool on) {
+    fnhook_set(FN_LOOKAT, on ? d_lookat : 0);
+    fnhook_set(FN_PROJECTION, on ? d_projection : 0);
+    fnhook_set(FN_EVENT_LOOKAT, on ? d_event_lookat : 0);
+    fnhook_set(FN_EVENT_PROJECTION, on ? d_event_projection : 0);
+}
 
+// The camera hooked while FSR (camjit_capture) or SMAA T2x (camjit_t2x) wants it, unhooked when neither does.
+static bool g_fsr_capture;
+static void capture_follow(void) {
+    if (g_test) return;  // (MHGU_JITTER_TEST: always)
+    bool on = g_fsr_capture || g_t2x;
+    if (on == g_capture) return;
+    if (on) {
+        camera_hooks(true);
+        g_capture = true;  // (after the hooks: the first capture has both matrices' functions hooked)
+        return;
+    }
+    g_capture = false;
+    camera_hooks(false);
+    pthread_mutex_lock(&g_lock);  // (turned on again later: no camera from before counts)
+    g_on = false, g_nviews = 0;
+    pthread_mutex_unlock(&g_lock);
+}
+void camjit_capture(bool on) {
+    g_fsr_capture = on;
+    capture_follow();
+}
 bool camjit_latest(CamRecord *out) {
     pthread_mutex_lock(&g_lock);
     bool ok = g_seq != 0;
@@ -241,11 +277,15 @@ void camjit_init(void) {
     g_test = e && sscanf(e, "%f,%f", &g_test_xy[0], &g_test_xy[1]) == 2;
     g_log = getenv("MHGU_JITTER_LOG") != NULL;
     g_rw = g_render_size[0], g_rh = g_render_size[1];
-    fnhook_set(FN_LOOKAT, hle_register("camjit:lookat", lookat));
-    fnhook_set(FN_PROJECTION, hle_register("camjit:projection", projection));
-    fnhook_set(FN_EVENT_LOOKAT, hle_register("camjit:event_lookat", event_lookat));
-    fnhook_set(FN_EVENT_PROJECTION, hle_register("camjit:event_projection", event_projection));
+    d_lookat = hle_register("camjit:lookat", lookat);
+    d_projection = hle_register("camjit:projection", projection);
+    d_event_lookat = hle_register("camjit:event_lookat", event_lookat);
+    d_event_projection = hle_register("camjit:event_projection", event_projection);
+    // (set from the start: the game makes its screenshot buffers once, early, and FSR can be turned on later)
     fnhook_set(FN_SCREENSHOT_BUFFERS, hle_register("camjit:screenshot_buffers", screenshot_buffers));
-    if (g_test) LOG("[camjit] test: the 3D picture shifted by (%g, %g) render pixels (x right, y down)\n", g_test_xy[0], g_test_xy[1]);
-    else LOG("[camjit] main camera hooked (main+0x1C33C view, main+0x1C358 projection): jitter while FSR or SMAA T2x runs\n");
+    if (g_test) {
+        camera_hooks(true);
+        g_capture = true;
+        LOG("[camjit] test: the 3D picture shifted by (%g, %g) render pixels (x right, y down)\n", g_test_xy[0], g_test_xy[1]);
+    } else LOG("[camjit] main camera (main+0x1C33C view, main+0x1C358 projection): hooked while FSR or SMAA T2x runs\n");
 }

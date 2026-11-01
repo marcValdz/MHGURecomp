@@ -16,7 +16,7 @@ typedef struct {
     float vp_w, vp_h;            // its viewport's size (the game's pixels: the render size's)
 } FsrDraw;
 
-extern bool g_fsr_on;  // FSR is on and works (set once at start-up: vk_fsr_init)
+extern bool g_fsr_on;  // FSR is on and works (vk_fsr_init at start-up, then vk_fsr_follow between frames)
 // FSR, or SMAA T2x / 4x ([Anti-aliasing] AntiAliasing = SMAAT2x / SMAA4x, picked live; never with FSR), runs:
 // exec.c tells fsr.c the frame's draws (vk_fsr_draw) and captures them for object motion. T2x uses the same frame
 // structure, camera, jitter and motion vectors as FSR, at the render size and without stand-ins (vk_fsr_map is FSR's
@@ -27,6 +27,7 @@ extern bool g_temporal_on;
 extern bool g_s2x_on;
 
 void vk_fsr_init(void);                    // device.c, once the device exists
+void vk_fsr_follow(void);                  // device.c backend_present, after the present: [Upscaler] FSR as saved now
 void vk_fsr_draw(const FsrDraw *d);        // exec.c draw(): may run FSR / T2x (the start of the HUD) before this draw
 // exec.c, from the start of the HUD to the frame's present: the game's full-screen image, the window texture it is
 // copied to, and the depth target drawn with them, as stand-ins at the output size (else t itself). depth: t is a

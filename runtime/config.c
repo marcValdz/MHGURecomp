@@ -721,7 +721,7 @@ const ConfigSetting g_settings[] = {
     {"Anti-aliasing", "FXAAMode", SET_CHOICE, F(fxaa_mode), 0, 0, 0, "Original,3_11", NULL, false, ERR_MISC},
     {"Anti-aliasing", "AntiAliasing", SET_CHOICE, F(aa), 0, 0, 0, "FXAA,CMAA2,SMAA,SMAAS2x,SMAAT2x,SMAA4x", NULL, false,
      ERR_MISC},
-    ON_OFF("Upscaler", "FSR", fsr, true),
+    {"Upscaler", "FSR", SET_BOOL, F(fsr), 0, 0, 0, NULL, NULL, false, ERR_TOGGLE},
     {"Upscaler", "Upscaler", SET_CHOICE, F(fsr_upscaler), 0, 0, 0, "FSR3|fsr3.1|3,FSR4|4,FSR4Lite|4lite", NULL, false, ERR_FSR},
     {"Upscaler", "FSRQuality", SET_CHOICE, F(fsr_quality), 0, 0, 0,
      "NativeAA|native|aa,Quality,Balanced,Performance,UltraPerformance|ultraperf", NULL, true, ERR_FSR},
@@ -1313,10 +1313,11 @@ void config_load(void) {
         static const char *const names[] = {"NativeAA", "Quality", "Balanced", "Performance", "UltraPerformance"};
         g_fsr_output[0] = (uint32_t)w, g_fsr_output[1] = (uint32_t)h;
         float r = ratio[g_config.fsr_quality];
-        fit_aspect((int)(w / r + 0.5f), (int)(h / r + 0.5f), aspect, &w, &h);
+        // (Native AA renders at that very size: fitted again, 1920x822 at 2.333 would become 1918x822, so turning FSR
+        // on or off there would change the render size)
+        if (g_config.fsr_quality > FSR_NATIVE) fit_aspect((int)(w / r + 0.5f), (int)(h / r + 0.5f), aspect, &w, &h);
         if (g_config.msaa > 1) LOG("[config] FSR is on: MSAA off (FSR does the anti-aliasing)\n");
         if (g_config.fxaa) LOG("[config] FSR is on: FXAA off (FSR does the anti-aliasing)\n");
-        g_config.msaa = 1, g_config.fxaa = 0;
         // textures are sampled for the output size (AMD's recommendation: log2(render / output)); MHGU_FSR_LODBIAS
         // overrides (A/B)
         g_fsr_lod_bias = log2f((float)w / (float)g_fsr_output[0]);
@@ -1343,6 +1344,9 @@ void config_load(void) {
     if (g_ui_size[0] < 1280) g_ui_size[0] = 1280;
 
     config_runtime_init(&g_config);
+    // FSR on: MSAA and FXAA off in the start-up copy; the live values keep the file's, which come back when FSR is
+    // turned off while the game runs (config_live_msaa / config_live_fxaa, nvn/vulkan/fsr.c vk_fsr_follow)
+    if (g_config.fsr) g_config.msaa = 1, g_config.fxaa = 0;
 
     static const char *const modes[] = {"windowed", "fullscreen", "borderless"};
     LOG("[config] %s: %s %dx%d, 3D %dx%d (shape %.3f, FOV x%.2f, HUD %.3f wide), %d fps, vsync %s, MSAA %dx, FXAA %s, "

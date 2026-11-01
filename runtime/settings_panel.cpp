@@ -1217,12 +1217,9 @@ std::vector<Row> main_rows() {
                    : c.msaa == 2 ? 1
                                  : 0,
                    {tr("Off"), "2x", "4x", "8x"}, [](int v) { c.msaa = 1 << v; }, ini("MSAA"));
-        if (g_config.fsr) {
-            r.back().cold = true;
-            if (c.fsr) {
-                r.back().enabled = false;
-                r.back().value = tr("Off (FSR)");
-            }
+        if (c.fsr) {  // (FSR on or off at once: fsr.c vk_fsr_follow; MSAA / FXAA come back when it is off)
+            r.back().enabled = false;
+            r.back().value = tr("Off (FSR)");
         }
         if (AA_USES_S2X(c.aa) && !c.fsr) {  // (SMAA S2x / 4x render with MSAA 2x: config_live_msaa)
             r.back().enabled = false;
@@ -1231,12 +1228,9 @@ std::vector<Row> main_rows() {
         add_choice(r, "aa", "Anti-aliasing", config_aa_choice(&c),  // (FXAA, FXAAMode and AntiAliasing in one)
                    {tr("Off"), tr("Game"), "FXAA", "CMAA2", "SMAA", "SMAA S2x", "SMAA T2x", "SMAA 4x"},
                    [](int v) { config_set_aa_choice(&c, v); });
-        if (g_config.fsr) {
-            r.back().cold = true;
-            if (c.fsr) {
-                r.back().enabled = false;
-                r.back().value = tr("Off (FSR)");
-            }
+        if (c.fsr) {
+            r.back().enabled = false;
+            r.back().value = tr("Off (FSR)");
         }
         number(r, "drawdist", tr("Draw distance"), &c.draw_distance, lo("DrawDistance"), hi("DrawDistance"), .25f,
                ini("DrawDistance"));
@@ -2384,7 +2378,7 @@ void settings_panel(bool *open) {
     } else if (s.saved_notice)
         ImGui::TextUnformatted(tr((config_restart_required(&s.draft) || mods_restart()) ? "Saved - restart pending" : "Saved"));
     if (s.view == View::Main) {
-        if (s.page == 1 && (s.draft.fsr || g_config.fsr))
+        if (s.page == 1 && s.draft.fsr)
             ImGui::TextWrapped("%s", tr("FSR overrides MSAA and FXAA while active."));
         if (s.page == MODS_PAGE)
             ImGui::TextWrapped("%s", tr("Mods load from top to bottom: a later mod wins. Select a conflict to choose which mod is used. Press Save, then restart."));

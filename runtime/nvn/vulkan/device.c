@@ -389,7 +389,7 @@ void vk_cycle_msaa(void) {
 
 // MHGU_CONTROL "msaa <n>": as many samples as the GPU allows up to n (test runs).
 void vk_set_msaa(uint32_t n) {
-    if (g_fsr_on) { LOG("[vk] MSAA stays off while FSR is on\n"); return; }
+    if (g_fsr_on && n > 1) { LOG("[vk] MSAA stays off while FSR is on\n"); return; }
     uint32_t s = 1;
     for (uint32_t c = 2; c <= 8; c *= 2) if (c <= n && (g_vk.msaa_counts & c)) s = c;
     g_vk.msaa = s;
@@ -735,6 +735,13 @@ static bool surface_ready(void) {
 typedef struct { uint32_t image; VkSemaphore acquired; bool ok; } Frame;
 static Frame cur_frame;
 
+// [Anti-aliasing] MSAA as saved now (1 while FSR is on: config_live_msaa), from the next pass on.
+static void msaa_follow(void) {
+    int msaa = config_live_msaa();
+    if (configured_msaa < 0) configured_msaa = msaa;  // (start-up set it: vk_init)
+    if (msaa != configured_msaa) { vk_set_msaa((uint32_t)msaa); configured_msaa = msaa; }
+}
+
 // Acquire the next window image and begin its render pass (cleared to black). false: nothing to draw into.
 static bool frame_begin(void) {
     cur_frame.ok = false;
@@ -746,9 +753,7 @@ static bool frame_begin(void) {
 #endif
     // All GPU mutations happen here under vk_lock(), after resolving the old
     // scene. Existing attachment caches defer old image destruction safely.
-    int msaa = config_live_msaa();
-    if (configured_msaa < 0) configured_msaa = msaa;  // (start-up set it: vk_init)
-    if (msaa != configured_msaa) { vk_set_msaa((uint32_t)msaa); configured_msaa = msaa; }
+    msaa_follow();
     if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height ||
         config_live_vsync() != swapchain_vsync || hdr_wanted() != swapchain_hdr) recreate_swapchain();
     if (!g_vk.swapchain) return false;
@@ -955,6 +960,10 @@ void backend_present(NvnTexture *t) {
     }
     g_frames++;
     g_present_count = g_frames;
+    // [Upscaler] FSR as saved now, from the next frame on (fsr.c; after this frame's present, which may show its
+    // stand-in), and MSAA with it (off while FSR is on, back when it is turned off)
+    vk_fsr_follow();
+    msaa_follow();
     {   // (debug) MHGU_CONTROL "dump": the next whole frame's passes (exec.c dump_pass)
         extern volatile int g_dump_active, g_dump_request;
         extern int g_dump_no, g_dump_frame;

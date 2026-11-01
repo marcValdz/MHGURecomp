@@ -161,8 +161,10 @@ extern float g_render_aspect;      // the picture's shape, 16:10 or wider: the 3
 extern float g_fov_scale;          // boot diagnostic value; camera_fovy reads config_live_fov()
 extern uint32_t g_ui_size[2];      // the game's 2D canvas size (tools/gen.py PATCHES: 0xdbcd48, 0xdbcd54)
 extern float g_ui_anchor_aspect;   // the HUD's width / height, 16:9 .. g_render_aspect (nvn/vulkan/exec.c)
-extern uint32_t g_fsr_output[2];   // FSR on: the size it upscales to (what g_render_size would be without it), else 0
-extern float g_fsr_lod_bias;       // FSR on: texture LOD bias for the lower render size, log2(render / output); else 0
+extern uint32_t g_fsr_output[2];   // FSR on at start-up: the size it upscales to (what g_render_size would be without
+                                   // it), else 0 (FSR turned on later upscales to g_render_size: fsr.c vk_fsr_init)
+extern float g_fsr_lod_bias;       // FSR on at start-up: texture LOD bias for the lower render size, log2(render / output);
+                                   // else 0. Samplers have it while FSR runs (nvn/vulkan/textures.c vk_set_lod_bias)
 extern const char *g_fsr4_fallback;  // Upscaler = FSR4 but FSR 3.1 runs: why, for the settings panel (nvn/vulkan/fsr4.c); else NULL
 float camera_fovy(float fovy, float aspect);  // a 3D camera's vertical field of view for its aspect (gen.py PATCHES)
 float camera_aspect(float aspect);            // a 3D camera's aspect: the screen's, a preview's 16:9 shape (gen.py PATCHES)
@@ -218,10 +220,12 @@ void config_set_live_fps(float fps);
 float config_live_fov(void);
 float config_live_mouse_sensitivity(void);
 float config_live_draw_distance(void);
-int config_live_fxaa(void);
+int config_live_fxaa(void);  // 0 while the renderer's FSR is on (config_fsr_running)
 int config_aa_choice(const Config *c);              // AA_CHOICE_*: what FXAA, FXAAMode and AntiAliasing pick together
 void config_set_aa_choice(Config *c, int choice);  // (out of range: nothing changes)
-int config_live_msaa(void);
+int config_live_msaa(void);  // 1 while the renderer's FSR is on
+int config_live_fsr(void);   // [Upscaler] FSR as saved now: switched at the next present (nvn/vulkan/fsr.c vk_fsr_follow)
+void config_fsr_running(bool on);  // (fsr.c) FSR is on / off now: MSAA and FXAA give way to it while it is on
 int config_live_vsync(void);
 int config_live_face_buttons(void);
 int config_live_menu_confirm(void);
