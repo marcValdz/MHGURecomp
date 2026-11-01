@@ -1396,9 +1396,10 @@ static VkPipeline resolve_pipeline(VkRenderPass rp, int kind, uint32_t samples) 
     return p;
 }
 
-// SMAA S2x: the 3D scene's colour target resolved by SMAA S2x (smaa.c) from its 2x samples. false: not this one.
+// SMAA S2x / 4x: the 3D scene's colour target resolved by SMAA S2x (smaa.c) from its 2x samples. false: not this one.
 static bool ms_resolve_s2x(VkCommandBuffer cb, TexBackend *b, TexBackend *m) {
-    if (m->samples != 2 || !m->ms_sampled || !vk_s2x_target(b)) return false;
+    int phase;
+    if (m->samples != 2 || !m->ms_sampled || !vk_s2x_target(b, &phase)) return false;
     static const VkComponentMapping id = {0};
     VkPostAa t = {.dst = vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, b->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT),
                   .format = b->format, .w = b->width, .h = b->height};
@@ -1410,7 +1411,7 @@ static bool ms_resolve_s2x(VkCommandBuffer cb, TexBackend *b, TexBackend *m) {
                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                                .image = m->image, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
     vkCmdPipelineBarrier(cb, VK_STAGES_ALL, VK_STAGES_ALL, 0, 0, NULL, 0, NULL, 1, &ib);
-    bool ok = vk_smaa_s2x(&t, ms);
+    bool ok = vk_smaa_s2x(&t, ms, phase);
     ib.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, ib.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     vkCmdPipelineBarrier(cb, VK_STAGES_ALL, VK_STAGES_ALL, 0, 0, NULL, 0, NULL, 1, &ib);
     if (ok) vk_s2x_done();
@@ -3904,8 +3905,8 @@ static void post_aa_drawn(void) {
 
 // FXAA off (settings): the game's FXAA pass (recognised by its shader) copies its input instead; FXAAMode = 3_11 draws
 // FXAA 3.11 there (fxaa_311); AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c), SMAAS2x copies its
-// input too, the scene resolved by S2x already (ms_resolve_s2x), and so does SMAAT2x, the jittered camera's frames
-// resolved at the start of the HUD instead (fsr.c).
+// input too, the scene resolved by S2x already (ms_resolve_s2x), and so do SMAAT2x and SMAA4x, the jittered camera's
+// frames resolved at the start of the HUD instead (fsr.c).
 static void copy_texture(const TexRef *src, const TexRef *dst, uint64_t flags);
 static bool fxaa_skipped(Prog *pr) {
     if (prog_fs_hash(pr) == FXAA_FS_HASH) {
@@ -3920,7 +3921,7 @@ static bool fxaa_skipped(Prog *pr) {
     NvnTexture *src = shader_texture_object(1, &pr->fi->tex[0]);
     if (!src || src == st.rt.color[0]) return false;
     if (aa == AA_SMAA_S2X && !vk_s2x_resolved()) aa = AA_SMAA;  // (S2x did not resolve the scene this frame: SMAA 1x)
-    if (aa == AA_SMAA_T2X && !g_temporal_on) aa = AA_SMAA;  // (until T2x runs, from the next frame on: SMAA 1x)
+    if (aa >= AA_SMAA_T2X && !g_temporal_on) aa = AA_SMAA;  // (until T2x / 4x runs, from the next frame on: SMAA 1x)
     if (aa == AA_SMAA) {  // (not possible: the game's own pass draws)
         VkPostAa t;
         if (!post_aa_target(src, &t) || !vk_smaa(&t)) return false;
@@ -3933,8 +3934,8 @@ static bool fxaa_skipped(Prog *pr) {
         gp_next_note = "";
         return true;
     }
-    // (FXAA off, SMAA S2x in the picture already, or SMAA T2x running: it resolves at the start of the HUD instead,
-    // fsr.c) the input copied
+    // (FXAA off, SMAA S2x in the picture already, or SMAA T2x / 4x running: it resolves at the start of the HUD
+    // instead, fsr.c) the input copied
     TexRef s = {.tex = (uint64_t)(uintptr_t)src}, d = {.tex = (uint64_t)(uintptr_t)st.rt.color[0]};
     if (st.rt.has_cview[0]) d.view = st.rt.cview[0], d.has_view = 1;
     copy_texture(&s, &d, 0);

@@ -142,6 +142,9 @@ Fixed on the way (2026-10-20):
   the two samples with S2x's subsample indices and writes the two blended and averaged (only those 2x colour images
   are made shader-readable: textures.c vk_tex_ms). fsr.c counts the frame's draws to learn which target is the 3D
   scene (vk_s2x_target); the game's FXAA pass copies its input when S2x resolved the scene, else SMAA 1x runs there.
+  AntiAliasing = SMAA4x is SMAA 4x, S2x temporally jittered: MSAA 2x as for S2x, the scene resolved by S2x with 4x's
+  subsample indices for the sample and the frame's jitter, the camera jittered by (0.125, -0.125) / (-0.125, 0.125)
+  render pixels (SMAA.hlsl's 4x jitters, y down), and at the start of the HUD the T2x resolve without its own edges.
 - Frame rate: the settings' FPS or MHGU_FRAMERATE (default 60, 30..240) writes the engine's target fps (float at +0x3c of the object in
   global 0x2326764, the field theboy181's 60fps patch sets) each frame. Above the monitor's refresh rate it needs
   VSync = Off: see "Frame rates above 60". MHGU_VSYNC=0/1 overrides the setting: no vsync / classic vsync.

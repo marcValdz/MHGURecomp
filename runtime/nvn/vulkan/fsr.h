@@ -17,12 +17,13 @@ typedef struct {
 } FsrDraw;
 
 extern bool g_fsr_on;  // FSR is on and works (set once at start-up: vk_fsr_init)
-// FSR, or SMAA T2x ([Anti-aliasing] AntiAliasing = SMAAT2x, picked live; never with FSR), runs: exec.c tells fsr.c
-// the frame's draws (vk_fsr_draw) and captures them for object motion. T2x uses the same frame structure, camera,
-// jitter and motion vectors as FSR, at the render size and without stand-ins (vk_fsr_map is FSR's only).
+// FSR, or SMAA T2x / 4x ([Anti-aliasing] AntiAliasing = SMAAT2x / SMAA4x, picked live; never with FSR), runs:
+// exec.c tells fsr.c the frame's draws (vk_fsr_draw) and captures them for object motion. T2x uses the same frame
+// structure, camera, jitter and motion vectors as FSR, at the render size and without stand-ins (vk_fsr_map is FSR's
+// only).
 extern bool g_temporal_on;
-// SMAA S2x (AntiAliasing = SMAAS2x, live; never with FSR): exec.c tells fsr.c the frame's draws too, only to learn which
-// target is the 3D scene (vk_s2x_target)
+// SMAA S2x alone (AntiAliasing = SMAAS2x, live; never with FSR or T2x): exec.c tells fsr.c the frame's draws too, only
+// to learn which target is the 3D scene (vk_s2x_target)
 extern bool g_s2x_on;
 
 void vk_fsr_init(void);                    // device.c, once the device exists
@@ -35,9 +36,10 @@ NvnTexture *vk_fsr_map(NvnTexture *t, bool depth);
 // stop
 NvnTexture *vk_fsr_present(NvnTexture *t);
 bool vk_fsr_input(NvnTexture *t);  // t is the full-screen image FSR upscales (kept RGBA8: textures.c vk_rt_widen)
-// SMAA S2x (exec.c vk_ms_resolve): whether b is this frame's 3D scene, to resolve by SMAA S2x, and that it was (the
-// game's FXAA pass then draws nothing: vk_s2x_resolved)
-bool vk_s2x_target(TexBackend *b);
+// SMAA S2x / 4x (exec.c vk_ms_resolve): whether b is this frame's 3D scene, to resolve by SMAA S2x (phase: the frame's
+// jitter, -1 for none), and that it was (4x: the HUD start's T2x then adds no edges of its own; S2x alone: the game's
+// FXAA pass draws nothing, vk_s2x_resolved).
+bool vk_s2x_target(TexBackend *b, int *phase);
 void vk_s2x_done(void);
 bool vk_s2x_resolved(void);
 

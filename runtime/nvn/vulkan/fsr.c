@@ -58,12 +58,12 @@ bool g_s2x_on;
 
 static uint32_t rw, rh, ow, oh;  // render size, output size (SMAA T2x: both the render size)
 static bool t2x_on, t2x_ready, t2x_failed;  // SMAA T2x runs (fsr.h g_temporal_on); its images and pipelines are made / could not be
-static bool logging;
-// SMAA S2x: the 3D scene, as the last frame's draws saw it (the render-size colour target most of its depth-writing
-// draws went to; during a frame the moving-object mask, drawn first, can lead the count when it is resolved), and
-// whether S2x resolved this frame's (vk_s2x_done)
+static bool t2x_4x, s2x_frame;  // .. as SMAA 4x; S2x resolved this frame's scene (vk_s2x_done)
+// SMAA S2x / 4x: the 3D scene, as the last frame saw it (the render-size colour target most scene draws went to; 4x:
+// at the start of the HUD, S2x alone: at the present). During a frame the moving-object mask, drawn first, can lead
+// the count when it is resolved.
 static void *s2x_scene;  // (its backend: compared, never followed)
-static bool s2x_frame;
+static bool logging;
 
 // ================================================================== stand-ins (the output-size images)
 typedef struct {
@@ -1705,7 +1705,8 @@ static bool run_t2x(NvnTexture *h, NvnTexture *depth, NvnTexture *mask, const Ca
     VkImageView mv = vk_image_view(&img_mvf, VK_IMAGE_VIEW_TYPE_2D, img_mvf.format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
     VkImageView react = v.react ? vk_image_view(&img_react, VK_IMAGE_VIEW_TYPE_2D, img_react.format, 0, 1, 0, 1, id,
                                                 VK_IMAGE_ASPECT_COLOR_BIT) : VK_NULL_HANDLE;
-    if (!mv || !vk_smaa_t2x(&t, mv, react, camjit_t2x_phase(cam->jitter), !v.reset)) return false;
+    if (!mv || !vk_smaa_t2x(&t, mv, react, camjit_t2x_phase(cam->jitter), !v.reset, !s2x_frame))
+        return false;
     hb->ms_valid = false;
     if (v.reset) n_reset++;
     prev_cam = *cam;
@@ -1714,18 +1715,25 @@ static bool run_t2x(NvnTexture *h, NvnTexture *depth, NvnTexture *mask, const Ca
 }
 
 static void t2x_hud_start(void) {
+    int best = -1;
+    for (int i = 0; i < 4; i++) if (colors[i].t && (best < 0 || colors[i].n > colors[best].n)) best = i;
+    s2x_scene = best >= 0 && colors[best].n >= 16 ? colors[best].t->backend : NULL;
     uint32_t dn = 0;
     NvnTexture *depth = scene_depth(&dn);
     CamRecord cam;
     bool have_cam = frame_camera(&cam);
     frame_fsr = depth && dn >= 16 && have_cam && run_t2x(g_h, depth, frame_mask(), &cam);
     VkPostAa t;
-    if (!frame_fsr && t2x_target(g_h, &t)) vk_smaa_t2x(&t, VK_NULL_HANDLE, VK_NULL_HANDLE, -1, false);  // (SMAA 1x)
+    if (!frame_fsr && t2x_target(g_h, &t))  // (SMAA 1x; with SMAA 4x's S2x in the picture: nothing more)
+        vk_smaa_t2x(&t, VK_NULL_HANDLE, VK_NULL_HANDLE, -1, false, !s2x_frame);
     static int last = -1, nlog;
-    if ((int)frame_fsr != last && nlog++ < 500)
-        LOG("[t2x] frame %llu: %s\n", (unsigned long long)g_present_count + 1,
-            frame_fsr ? "SMAA T2x" : !depth || dn < 16 ? "SMAA 1x: no 3D scene this frame" : "SMAA 1x: the main camera was not computed");
-    last = frame_fsr;
+    int now = frame_fsr * 2 + s2x_frame;
+    if (now != last && nlog++ < 500)
+        LOG("[t2x] frame %llu: %s%s\n", (unsigned long long)g_present_count + 1,
+            frame_fsr ? (s2x_frame ? "SMAA 4x" : t2x_4x ? "SMAA T2x: no S2x this frame (not MSAA 2x?)" : "SMAA T2x")
+            : s2x_frame ? "SMAA S2x only: " : "SMAA 1x: ",
+            frame_fsr ? "" : !depth || dn < 16 ? "no 3D scene this frame" : "the main camera was not computed");
+    last = now;
 }
 
 // The start of the HUD: FSR (or scaling) into H', then H, P, D are replaced from here on (SMAA T2x: in H, nothing replaced).
@@ -1795,7 +1803,7 @@ void vk_fsr_draw(const FsrDraw *d) {
         if (main_camera_draw(d)) menu_models++;  // (menus, see the top)
         else if (menu_camera_draw(d)) menu_cams++;
     }
-    if (g_s2x_on || hud_seen || !g_h || !d->color0) return;  // (SMAA S2x: only the count above)
+    if (g_s2x_on || hud_seen || !g_h || !d->color0) return;  // (S2x alone: only the count above)
     if (d->color0 == g_h) {
         bool post = d->count <= 6;
         bool reads_rt = false;
@@ -1852,12 +1860,19 @@ static bool t2x_init(void) {
 // Without FSR, once a frame: SMAA T2x starts (from the next frame on) or stops as [Anti-aliasing] AntiAliasing says
 // (live: the settings menu). true while it runs.
 static bool t2x_present(void) {
-    bool want = config_live_aa() == AA_SMAA_T2X;
+    int aa = config_live_aa();
+    bool want = aa == AA_SMAA_T2X || aa == AA_SMAA_4X, four = aa == AA_SMAA_4X;
     if (want && !t2x_ready && !t2x_failed) t2x_ready = !(t2x_failed = !t2x_init());
     want = want && t2x_ready;
+    if (want && t2x_on && four != t2x_4x) {  // T2x <-> 4x: the other jitter, from a fresh history
+        camjit_t2x(true, t2x_4x = four);
+        prev_cam.seq = 0;
+        LOG("[t2x] SMAA %s\n", four ? "4x" : "T2x");
+    }
     if (want == t2x_on) return want;
+    bool was4x = t2x_4x;
     t2x_on = g_temporal_on = want;
-    camjit_t2x(want);
+    camjit_t2x(want, t2x_4x = four);
     if (want) {
         not_scene = 0;
     } else {  // (the next T2x frame starts afresh: no history, no jitter until it runs)
@@ -1867,12 +1882,12 @@ static bool t2x_present(void) {
         frame_open = redirect = hud_seen = frame_fsr = false;
         last_target = last_src = NULL;
     }
-    LOG("[t2x] SMAA T2x %s\n", want ? "on" : "off");
+    LOG("[t2x] SMAA %s %s\n", (want ? four : was4x) ? "4x" : "T2x", want ? "on" : "off");
     return want;
 }
 
-// SMAA S2x, once a frame: on or off as [Anti-aliasing] AntiAliasing says (live; never with FSR); while on, the 3D scene
-// of the frame that ends is the one the next frame's MSAA resolve gives S2x.
+// SMAA S2x alone, once a frame: on or off as [Anti-aliasing] AntiAliasing says (live); while on, the 3D scene of the
+// frame that ends is the one the next frame's MSAA resolve gives S2x.
 static void s2x_present(void) {
     bool want = !g_fsr_on && config_live_aa() == AA_SMAA_S2X;
     if (want != g_s2x_on) {
@@ -1894,12 +1909,21 @@ static void s2x_present(void) {
     frame_open = false;
 }
 
-bool vk_s2x_target(TexBackend *b) { return g_s2x_on && frame_open && s2x_scene && s2x_scene == (void *)b; }
+// SMAA S2x / 4x (exec.c vk_ms_resolve): whether b is the 3D scene (s2x_scene), resolved by S2x; phase: the frame's
+// jitter (camjit_t2x_phase), -1 without one (S2x alone: never one).
+bool vk_s2x_target(TexBackend *b, int *phase) {
+    if (!(g_s2x_on || (t2x_on && t2x_4x)) || !frame_open || !s2x_scene || s2x_scene != (void *)b) return false;
+    CamRecord cam;
+    *phase = !g_s2x_on && frame_camera(&cam) && (cam.jitter[0] != 0.0f || cam.jitter[1] != 0.0f) ? camjit_t2x_phase(cam.jitter)
+                                                                                                    : -1;
+    return true;
+}
+
 void vk_s2x_done(void) { s2x_frame = true; }
 bool vk_s2x_resolved(void) { return frame_open && s2x_frame; }
 
 NvnTexture *vk_fsr_present(NvnTexture *t) {
-    s2x_present();  // (before T2x's: from T2x to S2x, this frame's count is still there)
+    s2x_present();  // (before T2x's: from T2x / 4x to S2x, this frame's count is still there)
     if (!g_fsr_on && !t2x_present()) return t;
     NvnTexture *show = t;
     if (redirect) {
