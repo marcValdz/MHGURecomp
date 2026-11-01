@@ -78,6 +78,8 @@ counter's rank or star menu).
 Multiplayer's Port and Join (from the next hub hosted or searched for) and SyncSmallMonsters apply at Save too.
 BonusContent counts from the next time the game opens the save, and the cheats folder is read again each time the
 menu opens.
+So do the window's Mode and Resolution (the window changes at once; the 3D picture keeps its start-up size, scaled
+to the window, until the next start).
 Render changes are consumed at render boundaries. Language, symbols and interface scale preview
 immediately and persist on Save. Cold fields carry an asterisk; the saved status
 indicates a pending restart only when cold settings differ from startup values.

@@ -153,6 +153,12 @@ int main(int argc, char **argv) {
     assert(config_live_fps()==120 && config_live_msaa()==4 && config_live_face_buttons()==FACE_LABEL);
     assert(config_restart_key("RenderResolution") && !config_restart_key("FOV"));
     assert(!config_restart_key("MSAA") && !config_restart_key("VSync") && !config_restart_key("FaceButtons"));
+    // The window's mode and size are live (ui.c display_follow)
+    assert(!config_restart_key("Mode") && !config_restart_key("Resolution"));
+    Config d = loaded;
+    d.display_mode = loaded.display_mode == DISPLAY_WINDOWED ? DISPLAY_BORDERLESS : DISPLAY_WINDOWED;
+    d.width = 2560; d.height = 1440;
+    assert(!config_restart_required(&d));
     assert(config_restart_key("framerate") == config_restart_key("FPS") && !config_restart_key("NoSuchKey"));
     // The menu's help: the default ini's comments, wrapped lines joined, the default last (none when empty)
     char help[2048];

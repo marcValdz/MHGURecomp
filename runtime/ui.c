@@ -99,19 +99,19 @@ static void fit_desktop(int *w, int *h) {
 // Full screen as the settings say (exclusive: the monitor mode closest to Resolution; else borderless desktop), or
 // windowed. The cursor only shows in a window, or over a menu or the chat box (they show it only as they open, so it
 // stays shown when full screen comes while one is open: F11, Alt+Enter).
+static int disp_mode, disp_w, disp_h;  // [Display] Mode and Resolution as applied (ui_init, then each Save: ui_run)
 static void set_fullscreen(bool on) {
     bool was = SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN;
     if (on && !was) SDL_GetWindowSize(window, &win_w, &win_h);
-    if (on && g_config.display_mode == DISPLAY_FULLSCREEN) {
+    if (on && disp_mode == DISPLAY_FULLSCREEN) {
         SDL_DisplayMode m;
         SDL_DisplayID d = SDL_GetDisplayForWindow(window);
-        if (SDL_GetClosestFullscreenDisplayMode(d, g_config.width, g_config.height, 0.0f, false, &m)) {
+        if (SDL_GetClosestFullscreenDisplayMode(d, disp_w, disp_h, 0.0f, false, &m)) {
             SDL_SetWindowFullscreenMode(window, &m);
             LOG("[ui] fullscreen %dx%d @ %.0f Hz\n", m.w, m.h, m.refresh_rate);
         } else {
             SDL_SetWindowFullscreenMode(window, NULL);
-            LOG("[ui] no fullscreen mode near %dx%d (%s): borderless instead\n", g_config.width, g_config.height,
-                SDL_GetError());
+            LOG("[ui] no fullscreen mode near %dx%d (%s): borderless instead\n", disp_w, disp_h, SDL_GetError());
         }
     } else if (on) {
         SDL_SetWindowFullscreenMode(window, NULL);
@@ -260,6 +260,7 @@ void ui_init(void) {
     // Subsequent saved changes are consumed by the host thread in ui_run().
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, g_config.background_input ? "1" : "0");
     if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) FATAL("SDL_InitSubSystem: %s\n", SDL_GetError());
+    disp_mode = g_config.display_mode, disp_w = g_config.width, disp_h = g_config.height;
     win_w = g_config.width, win_h = g_config.height;
 #ifdef __ANDROID__
     // (a resizable window may turn any way on Android, whatever the manifest says: landscape only. The window
@@ -284,9 +285,38 @@ void ui_toggle_fullscreen(void) {
     set_fullscreen(!(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
 }
 
+// [Display] Mode and Resolution saved in the settings menu: the window follows at once (the swapchain follows the
+// window, nvn/vulkan/device.c); the 3D picture keeps its start-up size, scaled to the window.
+static void display_follow(void) {
+    int mode, w, h;
+    config_live_display(&mode, &w, &h);
+    if (!w) {  // (Desktop)
+        const SDL_DisplayMode *dm = SDL_GetDesktopDisplayMode(SDL_GetDisplayForWindow(window));
+        w = dm ? dm->w : disp_w, h = dm ? dm->h : disp_h;
+    }
+    if (mode == disp_mode && w == disp_w && h == disp_h) return;
+    LOG("[live] display: %s %dx%d -> %s %dx%d\n", disp_mode == DISPLAY_WINDOWED ? "windowed" : disp_mode == DISPLAY_FULLSCREEN ? "fullscreen" : "borderless",
+        disp_w, disp_h, mode == DISPLAY_WINDOWED ? "windowed" : mode == DISPLAY_FULLSCREEN ? "fullscreen" : "borderless", w, h);
+    bool size_changed = w != disp_w || h != disp_h;
+    disp_mode = mode, disp_w = w, disp_h = h;
+    if (mode == DISPLAY_WINDOWED) {
+        if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) win_w = w, win_h = h, set_fullscreen(false);
+        if (size_changed || !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)) {
+            win_w = w, win_h = h;
+            fit_desktop(&win_w, &win_h);
+            SDL_SetWindowSize(window, win_w, win_h);
+            SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+        }
+    } else {
+        win_w = w, win_h = h;
+        set_fullscreen(true);
+    }
+}
+
 int ui_run(void) {
     int background = config_live_background_input();
     for (;;) {
+        display_follow();
         int wanted_background = config_live_background_input();
         if (wanted_background != background) {
             SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, wanted_background ? "1" : "0");

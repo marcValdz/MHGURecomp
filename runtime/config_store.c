@@ -21,6 +21,7 @@ static bool have_saved, runtime_ready, runtime_fsr;
 static SDL_AtomicInt window_focused = {1};
 // [Display]
 static SDL_AtomicInt live_fov;
+static SDL_AtomicInt live_disp_mode, live_disp_w, live_disp_h;
 // [Anti-aliasing]
 static SDL_AtomicInt live_msaa = {1};
 static SDL_AtomicInt live_fxaa = {1};
@@ -152,6 +153,10 @@ static void publish_live(const Config *c, bool all) {
     if (all || c->lag_compensation != saved.lag_compensation) SDL_SetAtomicInt(&live_lagcomp, c->lag_compensation);
     if (all || c->ldn_direct != saved.ldn_direct) SDL_SetAtomicInt(&live_ldn_direct, c->ldn_direct);
     if (all || c->bonus_content != saved.bonus_content) SDL_SetAtomicInt(&live_bonus, c->bonus_content);
+    if (all || c->display_mode != saved.display_mode || c->width != saved.width || c->height != saved.height) {
+        SDL_SetAtomicInt(&live_disp_w, c->width), SDL_SetAtomicInt(&live_disp_h, c->height);
+        SDL_SetAtomicInt(&live_disp_mode, c->display_mode);
+    }
 }
 // Quick apply (settings_panel.cpp): the menu's unsaved values of the hot settings are live while it is open. A value
 // back at the file's gets what was live before the menu changed anything (an environment override stays one), and
@@ -267,6 +272,9 @@ float config_live_hp_village(void) {
     float v = live_hp.village;
     SDL_UnlockSpinlock(&live_hp_lock);
     return v;
+}
+void config_live_display(int *mode, int *width, int *height) {
+    *mode = SDL_GetAtomicInt(&live_disp_mode), *width = SDL_GetAtomicInt(&live_disp_w), *height = SDL_GetAtomicInt(&live_disp_h);
 }
 int config_live_discord(void) { return SDL_GetAtomicInt(&live_discord); }
 int config_live_discord_hunter(void) { return SDL_GetAtomicInt(&live_discord_hunter); }

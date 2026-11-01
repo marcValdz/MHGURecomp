@@ -263,6 +263,7 @@ int config_live_ldn_direct(void);  // [Multiplayer] Direct (net/ldn.c: for the n
 int config_live_sync_small_monsters(void);  // [Multiplayer] SyncSmallMonsters (net/emsync.c)
 int config_live_lag_compensation(void);  // [Multiplayer] LagCompensation (net/hitsync.c)
 int config_live_bonus_content(void);    // [Bonus Content] BonusContent: each time the game opens a save (services/bonus.c)
+void config_live_display(int *mode, int *width, int *height);  // [Display] Mode, Resolution (0x0: the desktop's) (ui.c)
 int config_live_discord(void);         // [Discord] RichPresence
 int config_live_discord_hunter(void);  // [Discord] ShowHunter
 int config_live_share_urgent(void);    // [Multiplayer] ShareUrgentCredit
