@@ -137,6 +137,11 @@ Fixed on the way (2026-10-20):
   reprojected along the motion vectors; the previous colour is clamped to the current 3x3 neighbourhood and dropped
   where fsr.c's reactive mask is set, so moving characters don't ghost. Programs built before it was picked get their
   motion capture variant the first time they draw with it on (exec.c capprog_later).
+  AntiAliasing = SMAAS2x is SMAA S2x: the scene renders with MSAA 2x whatever MSAA says (config_live_msaa), and where
+  exec.c resolves the scene's colour target (vk_ms_resolve) smaa.c's vk_smaa_s2x runs edges and weights on each of
+  the two samples with S2x's subsample indices and writes the two blended and averaged (only those 2x colour images
+  are made shader-readable: textures.c vk_tex_ms). fsr.c counts the frame's draws to learn which target is the 3D
+  scene (vk_s2x_target); the game's FXAA pass copies its input when S2x resolved the scene, else SMAA 1x runs there.
 - Frame rate: the settings' FPS or MHGU_FRAMERATE (default 60, 30..240) writes the engine's target fps (float at +0x3c of the object in
   global 0x2326764, the field theboy181's 60fps patch sets) each frame. Above the monitor's refresh rate it needs
   VSync = Off: see "Frame rates above 60". MHGU_VSYNC=0/1 overrides the setting: no vsync / classic vsync.

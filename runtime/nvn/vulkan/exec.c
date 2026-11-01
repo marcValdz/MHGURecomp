@@ -1396,6 +1396,29 @@ static VkPipeline resolve_pipeline(VkRenderPass rp, int kind, uint32_t samples) 
     return p;
 }
 
+// SMAA S2x: the 3D scene's colour target resolved by SMAA S2x (smaa.c) from its 2x samples. false: not this one.
+static bool ms_resolve_s2x(VkCommandBuffer cb, TexBackend *b, TexBackend *m) {
+    if (m->samples != 2 || !m->ms_sampled || !vk_s2x_target(b)) return false;
+    static const VkComponentMapping id = {0};
+    VkPostAa t = {.dst = vk_image_view(b, VK_IMAGE_VIEW_TYPE_2D, b->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT),
+                  .format = b->format, .w = b->width, .h = b->height};
+    VkImageView ms = vk_image_view(m, VK_IMAGE_VIEW_TYPE_2D, m->format, 0, 1, 0, 1, id, VK_IMAGE_ASPECT_COLOR_BIT);
+    if (!t.dst || !ms) return false;
+    VkImageMemoryBarrier ib = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_ALL_WRITES,
+                               .dstAccessMask = VK_ACCESS_ALL, .oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                               .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                               .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                               .image = m->image, .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+    vkCmdPipelineBarrier(cb, VK_STAGES_ALL, VK_STAGES_ALL, 0, 0, NULL, 0, NULL, 1, &ib);
+    bool ok = vk_smaa_s2x(&t, ms);
+    ib.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, ib.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    vkCmdPipelineBarrier(cb, VK_STAGES_ALL, VK_STAGES_ALL, 0, 0, NULL, 0, NULL, 1, &ib);
+    if (ok) vk_s2x_done();
+    ss_forget();
+    gp_mark("  resolve (SMAA S2x)");
+    return ok;
+}
+
 void vk_ms_resolve(TexBackend *b) {
     if (!b || !b->ms_dirty) return;
     b->ms_dirty = false;
@@ -1405,6 +1428,7 @@ void vk_ms_resolve(TexBackend *b) {
     VkCommandBuffer cb = vk_cmd();
     vk_full_barrier(cb);
     bool depth = b->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+    if (!depth && ms_resolve_s2x(cb, b, m)) return;
     VkImageLayout att = depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     VkImageMemoryBarrier ib = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_ALL_WRITES,
                                .dstAccessMask = VK_ACCESS_ALL, .oldLayout = att, .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -3879,8 +3903,9 @@ static void post_aa_drawn(void) {
 }
 
 // FXAA off (settings): the game's FXAA pass (recognised by its shader) copies its input instead; FXAAMode = 3_11 draws
-// FXAA 3.11 there (fxaa_311); AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c), SMAAT2x copies its
-// input too, the jittered camera's frames resolved at the start of the HUD instead (fsr.c).
+// FXAA 3.11 there (fxaa_311); AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c), SMAAS2x copies its
+// input too, the scene resolved by S2x already (ms_resolve_s2x), and so does SMAAT2x, the jittered camera's frames
+// resolved at the start of the HUD instead (fsr.c).
 static void copy_texture(const TexRef *src, const TexRef *dst, uint64_t flags);
 static bool fxaa_skipped(Prog *pr) {
     if (prog_fs_hash(pr) == FXAA_FS_HASH) {
@@ -3894,6 +3919,7 @@ static bool fxaa_skipped(Prog *pr) {
         return false;
     NvnTexture *src = shader_texture_object(1, &pr->fi->tex[0]);
     if (!src || src == st.rt.color[0]) return false;
+    if (aa == AA_SMAA_S2X && !vk_s2x_resolved()) aa = AA_SMAA;  // (S2x did not resolve the scene this frame: SMAA 1x)
     if (aa == AA_SMAA_T2X && !g_temporal_on) aa = AA_SMAA;  // (until T2x runs, from the next frame on: SMAA 1x)
     if (aa == AA_SMAA) {  // (not possible: the game's own pass draws)
         VkPostAa t;
@@ -3907,7 +3933,8 @@ static bool fxaa_skipped(Prog *pr) {
         gp_next_note = "";
         return true;
     }
-    // (FXAA off, or SMAA T2x running: it resolves at the start of the HUD instead, fsr.c) the input copied
+    // (FXAA off, SMAA S2x in the picture already, or SMAA T2x running: it resolves at the start of the HUD instead,
+    // fsr.c) the input copied
     TexRef s = {.tex = (uint64_t)(uintptr_t)src}, d = {.tex = (uint64_t)(uintptr_t)st.rt.color[0]};
     if (st.rt.has_cview[0]) d.view = st.rt.cview[0], d.has_view = 1;
     copy_texture(&s, &d, 0);
@@ -3995,7 +4022,7 @@ static void draw(CmdRec *r, bool indexed) {
     if (!pr) { stat_skipped++; return; }
     if (!await_build(&pr->state, pr, 0)) { skip_draw(&stat_skip_prog); return; }
     FsrDraw fd = {0};
-    if (g_temporal_on || vk_hdr_tracking()) {  // FSR / SMAA T2x / HDR: the frame's structure (fsr.c, hdr.c)
+    if (g_temporal_on || g_s2x_on || vk_hdr_tracking()) {  // FSR / SMAA T2x / S2x / HDR: the frame's structure (fsr.c, hdr.c)
         fd = (FsrDraw){.color0 = st.rt.ncolor ? st.rt.color[0] : NULL, .depth = st.rt.depth, .count = (uint32_t)r->x[2],
                        .depth_write = st.ds[0] && st.ds[1], .vubuf = &st.ubuf[0][0].addr, .nvubuf = 18,
                        .vp_w = st.viewport[0][2], .vp_h = st.viewport[0][3]};
@@ -4018,7 +4045,8 @@ static void draw(CmdRec *r, bool indexed) {
     VkPrimitiveTopology topo;
     bool native = topology(mode, &topo);
     if (!native && mode != 6 && mode != 7 && mode != 9) { stat_skipped++; return; }
-    if (g_temporal_on) vk_fsr_draw(&fd);  // FSR / SMAA T2x: at the start of the HUD they run before this draw (fsr.c)
+    // FSR / SMAA T2x: at the start of the HUD they run before this draw (fsr.c); SMAA S2x: which target is the scene
+    if (g_temporal_on || g_s2x_on) vk_fsr_draw(&fd);
 
     ms_want_depth = st.ds[0] && st.rt.depth;  // (MSAA, a picture 3D models are drawn into: pass_models)
     if (in_pass && pass_models && !pass_msaa && ms_want_depth && !pass_want_depth) st.rt_dirty = true;

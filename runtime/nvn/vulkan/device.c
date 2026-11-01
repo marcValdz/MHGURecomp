@@ -321,9 +321,10 @@ static void create_device(void) {
     if (g_vk.stencil_export) counts &= lim->sampledImageStencilSampleCounts;
     g_vk.msaa = 1;
     g_vk.msaa_counts = counts & (VK_SAMPLE_COUNT_2_BIT | VK_SAMPLE_COUNT_4_BIT | VK_SAMPLE_COUNT_8_BIT);
-    for (uint32_t s = (uint32_t)g_config.msaa; s > 1 && g_vk.msaa == 1; s >>= 1)
+    uint32_t want = (uint32_t)config_live_msaa();  // (g_config.msaa, or 2x for SMAA S2x)
+    for (uint32_t s = want; s > 1 && g_vk.msaa == 1; s >>= 1)
         if (g_vk.msaa_counts & s) g_vk.msaa = s;
-    if (g_vk.msaa != (uint32_t)g_config.msaa) LOG("[vk] MSAA %dx not supported: %ux\n", g_config.msaa, g_vk.msaa);
+    if (g_vk.msaa != want) LOG("[vk] MSAA %ux not supported: %ux\n", want, g_vk.msaa);
 
     VmaAllocatorCreateInfo ai = {.physicalDevice = g_vk.phys, .device = g_vk.dev, .instance = g_vk.inst,
                                  .vulkanApiVersion = g_vk.api11 ? VK_API_VERSION_1_1 : VK_API_VERSION_1_2};
@@ -742,7 +743,7 @@ static bool frame_begin(void) {
     // All GPU mutations happen here under vk_lock(), after resolving the old
     // scene. Existing attachment caches defer old image destruction safely.
     int msaa = config_live_msaa();
-    if (configured_msaa < 0) configured_msaa = g_config.msaa;
+    if (configured_msaa < 0) configured_msaa = msaa;  // (start-up set it: vk_init)
     if (msaa != configured_msaa) { vk_set_msaa((uint32_t)msaa); configured_msaa = msaa; }
     if (!g_vk.swapchain || (uint32_t)w != g_vk.sc_extent.width || (uint32_t)h != g_vk.sc_extent.height ||
         config_live_vsync() != swapchain_vsync || hdr_wanted() != swapchain_hdr) recreate_swapchain();
@@ -916,7 +917,7 @@ void backend_present(NvnTexture *t) {
     vi_apply_framerate();
     vk_lock();
     if (vk_hdr_tracking()) vk_hdr_present(t);  // (HDR: learns the frame's full-screen image, hdr.c)
-    t = vk_fsr_present(t);  // FSR: its output-size picture with the HUD; SMAA T2x starts / stops here (fsr.c)
+    t = vk_fsr_present(t);  // FSR: its output-size picture with the HUD; SMAA S2x / T2x start and stop here (fsr.c)
     TexBackend *b = vk_tex(t, true);
     b->presented = true;
     vk_end_pass();

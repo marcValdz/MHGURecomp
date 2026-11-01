@@ -1205,6 +1205,10 @@ std::vector<Row> main_rows() {
                 r.back().value = tr("Off (FSR)");
             }
         }
+        if (c.aa == AA_SMAA_S2X && !c.fsr) {  // (SMAA S2x renders with MSAA 2x: config_live_msaa)
+            r.back().enabled = false;
+            r.back().value = "2x (SMAA S2x)";
+        }
         add_bool(r, "fxaa", "FXAA", &c.fxaa, ini("FXAA"));
         if (g_config.fsr) {
             r.back().cold = true;
@@ -1222,7 +1226,7 @@ std::vector<Row> main_rows() {
                 r.back().value = tr("Off (FSR)");
             }
         }
-        add_choice(r, "aa", "Anti-aliasing", c.aa, {"FXAA", "SMAA", "SMAA T2x"}, [](int v) { c.aa = v; },
+        add_choice(r, "aa", "Anti-aliasing", c.aa, {"FXAA", "SMAA", "SMAA S2x", "SMAA T2x"}, [](int v) { c.aa = v; },
                    ini("AntiAliasing"));
         if (g_config.fsr) {
             r.back().cold = true;

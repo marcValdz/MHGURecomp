@@ -1,5 +1,5 @@
-// SMAA 1x and T2x ([Anti-aliasing] AntiAliasing = SMAA / SMAAT2x). Jorge Jimenez et al.'s SMAA (third_party/smaa,
-// MIT): SMAA.hlsl's GLSL path, compiled with shaderc, and its precomputed area and search textures.
+// SMAA 1x, S2x and T2x ([Anti-aliasing] AntiAliasing = SMAA / SMAAS2x / SMAAT2x). Jorge Jimenez et al.'s SMAA
+// (third_party/smaa, MIT): SMAA.hlsl's GLSL path, compiled with shaderc, and its precomputed area and search textures.
 //  - 1x, in place of the game's FXAA pass (exec.c fxaa_skipped): three passes at the target's size: luma edge
 //    detection of the game's FXAA input (gamma space, as SMAA wants it) into an RG8 image, the blending weights into an
 //    RGBA8 one, then the neighbourhood blending into the game's target. The edges are cleared first: the edge pass
@@ -8,6 +8,9 @@
 //    the other, and its motion vectors): the same passes with that frame's subsample indices into one of two history
 //    images, the velocity's length packed in alpha (SMAA_REPROJECTION), then SMAA's resolve of it and the previous
 //    frame's, reprojected along the motion vectors, back into the image.
+//  - S2x: the 3D scene renders with MSAA 2x and, where exec.c resolves it (once a frame, before the game's post
+//    effects read it), each of its two samples goes through edges and weights on its own (S2x's subsample indices for
+//    the sample), the two blended and averaged into the resolved image.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,7 +26,7 @@ __asm__(".pushsection .rodata\n.globl smaa_hlsl\nsmaa_hlsl:\n.incbin \"third_par
         ".globl smaa_hlsl_end\nsmaa_hlsl_end:\n.byte 0\n.popsection");
 extern const char smaa_hlsl[], smaa_hlsl_end[];
 
-enum { EDGES, WEIGHTS, BLEND, BLEND_T2X, RESOLVE, NPASS };
+enum { EDGES, WEIGHTS, BLEND, SEPARATE, BLEND_S2X, BLEND_T2X, RESOLVE, NPASS };  // (from BLEND_T2X: reprojection)
 typedef struct { VkImage image; VmaAllocation mem; VkImageView view; uint32_t w, h; } Img;
 
 // The passes' GLSL: SMAA.hlsl's vertex or pixel half (the Ultra preset, the target's size and the subsample indices from
@@ -41,6 +44,11 @@ static const char *const vs_main[NPASS] = {
     "layout(location = 1) out vec4 offset[3];\n"
     "layout(location = 4) out vec2 pixcoord;\n"
     "void main() {\n" VS_HEAD "  SMAABlendingWeightCalculationVS(texcoord, pixcoord, offset);\n}\n",
+    "layout(location = 0) out vec2 texcoord;\n"
+    "layout(location = 1) out vec4 offset;\n"
+    "void main() {\n" VS_HEAD "  SMAANeighborhoodBlendingVS(texcoord, offset);\n}\n",
+    "layout(location = 0) out vec2 texcoord;\n"
+    "void main() {\n" VS_HEAD "}\n",
     "layout(location = 0) out vec2 texcoord;\n"
     "layout(location = 1) out vec4 offset;\n"
     "void main() {\n" VS_HEAD "  SMAANeighborhoodBlendingVS(texcoord, offset);\n}\n",
@@ -69,6 +77,23 @@ static const char *const fs_main[NPASS] = {
     "layout(location = 1) in vec4 offset;\n"
     "layout(location = 0) out vec4 o;\n"
     "void main() { o = SMAANeighborhoodBlendingPS(texcoord, offset, colorTex, blendTex); }\n",
+    // S2x: one sample (pc.sub.x) of the multisampled image as an image of its own (SMAASeparatePS)
+    "layout(set = 0, binding = 0) uniform sampler2DMS msTex;\n"
+    "layout(location = 0) in vec2 texcoord;\n"
+    "layout(location = 0) out vec4 o;\n"
+    "void main() { o = texelFetch(msTex, ivec2(gl_FragCoord.xy), int(pc.sub.x)); }\n",
+    // S2x: each sample blended along its own weights, the two averaged (SMAA.hlsl: the second run blends at 0.5)
+    "layout(set = 0, binding = 0) uniform sampler2D colorTex0;\n"
+    "layout(set = 0, binding = 1) uniform sampler2D blendTex0;\n"
+    "layout(set = 0, binding = 2) uniform sampler2D colorTex1;\n"
+    "layout(set = 0, binding = 3) uniform sampler2D blendTex1;\n"
+    "layout(location = 0) in vec2 texcoord;\n"
+    "layout(location = 1) in vec4 offset;\n"
+    "layout(location = 0) out vec4 o;\n"
+    "void main() {\n"
+    "  o = 0.5 * (SMAANeighborhoodBlendingPS(texcoord, offset, colorTex0, blendTex0) +\n"
+    "             SMAANeighborhoodBlendingPS(texcoord, offset, colorTex1, blendTex1));\n"
+    "}\n",
     "layout(set = 0, binding = 0) uniform sampler2D colorTex;\n"
     "layout(set = 0, binding = 1) uniform sampler2D blendTex;\n"
     "layout(set = 0, binding = 2) uniform sampler2D velocityTex;\n"
@@ -204,12 +229,18 @@ static bool image(Img *m, VkFormat f, uint32_t w, uint32_t h, VkImageUsageFlags 
 }
 
 // What one target size needs (kept for the session: the game draws these passes at one or two sizes): the edges, the
-// blending weights and, for T2x, two frames of history in the target's format (hist_ok: hist[cur ^ 1] holds the last).
-typedef struct { Img edges, weights, hist[2]; VkFormat hist_fmt; int cur; bool hist_ok; } Size;
+// blending weights and, for T2x, two frames of history in the target's format (hist_ok: hist[cur ^ 1] holds the last);
+// for S2x, the two samples apart (in the target's format) and the second one's blending weights.
+typedef struct { Img edges, weights, hist[2], sample[2], weights1; VkFormat hist_fmt, sample_fmt; int cur; bool hist_ok; } Size;
 static Size sizes[4];
+enum { MODE_1X, MODE_T2X, MODE_S2X };
 
+// subsampleIndices (SMAA.hlsl @SUBSAMPLE_INDICES) of S2x's samples 0 / 1
+static const float s2x_sub[2][4] = {{1, 1, 1, 0}, {2, 2, 2, 0}};
+
+// sub: the subsample indices (NULL: none, SMAA 1x; SEPARATE: the sample in x)
 static void pass(VkCommandBuffer cb, VkPipeline p, VkRenderPass rp, VkImageView target, uint32_t w, uint32_t h,
-                 const VkDescriptorImageInfo *in, uint32_t nin, int subsample) {
+                 const VkDescriptorImageInfo *in, uint32_t nin, const float *sub) {
     VkDescriptorSet set = vk_alloc_set(set_layout);
     VkWriteDescriptorSet wr[4];
     for (uint32_t i = 0; i < nin; i++)
@@ -220,9 +251,8 @@ static void pass(VkCommandBuffer cb, VkPipeline p, VkRenderPass rp, VkImageView 
     VkRect2D area = {{0, 0}, {w, h}};
     VkRenderPassBeginInfo bi = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = rp,
                                 .framebuffer = vk_framebuffer(rp, &target, 1, w, h), .renderArea = area};
-    // subsampleIndices (SMAA.hlsl @SUBSAMPLE_INDICES): 1x 0; T2x (1, 1, 1, 0) for the first jitter, (2, 2, 2, 0) the second
-    float s = subsample < 0 ? 0.0f : (float)(subsample + 1);
-    float pc[8] = {1.0f / (float)w, 1.0f / (float)h, (float)w, (float)h, s, s, s, 0.0f};
+    float pc[8] = {1.0f / (float)w, 1.0f / (float)h, (float)w, (float)h};
+    if (sub) memcpy(pc + 4, sub, 4 * sizeof *sub);
     vkCmdBeginRenderPass(cb, &bi, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
     vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, NULL);
@@ -237,8 +267,9 @@ static void pass(VkCommandBuffer cb, VkPipeline p, VkRenderPass rp, VkImageView 
 
 static Img area, search, still;  // the lookup textures; still: one texel of zero motion (a resolve without history)
 
-// The lookup textures, the images of t's size and the passes' pipelines (T2x: with the history and its two passes).
-static Size *prepare(const VkPostAa *t, bool t2x, VkPipeline p[NPASS], VkRenderPass rp[NPASS]) {
+// The lookup textures, the images of t's size and the passes' pipelines the mode uses.
+static Size *prepare(const VkPostAa *t, int mode, VkPipeline p[NPASS], VkRenderPass rp[NPASS]) {
+    bool t2x = mode == MODE_T2X, s2x = mode == MODE_S2X;
     static bool tables_failed;
     static const uint8_t zero[4] = {0};
     if (!area.view && !tables_failed)
@@ -264,61 +295,100 @@ static Size *prepare(const VkPostAa *t, bool t2x, VkPipeline p[NPASS], VkRenderP
         }
         z->hist_fmt = t->format, z->hist_ok = false;
     }
+    if (s2x && z->sample[0].view && z->sample_fmt != t->format) z->sample[0].view = z->sample[1].view = VK_NULL_HANDLE;
+    if (s2x && (!z->weights1.view || !z->sample[0].view)) {
+        if ((!z->weights1.view && !image(&z->weights1, VK_FORMAT_R8G8B8A8_UNORM, t->w, t->h, rt, NULL, 0)) ||
+            !image(&z->sample[0], t->format, t->w, t->h, rt, NULL, 0) || !image(&z->sample[1], t->format, t->w, t->h, rt, NULL, 0)) {
+            LOG("[vk] SMAA S2x: no images for %ux%u\n", t->w, t->h);
+            return NULL;
+        }
+        z->sample_fmt = t->format;
+    }
     VkFormat rg8 = VK_FORMAT_R8G8_UNORM, rgba8 = VK_FORMAT_R8G8B8A8_UNORM;
     rp[EDGES] = vk_render_pass(&rg8, 1, VK_FORMAT_UNDEFINED, 1);
     rp[WEIGHTS] = vk_render_pass(&rgba8, 1, VK_FORMAT_UNDEFINED, 1);
-    rp[BLEND] = rp[BLEND_T2X] = rp[RESOLVE] = vk_render_pass(&t->format, 1, VK_FORMAT_UNDEFINED, 1);
+    rp[BLEND] = rp[SEPARATE] = rp[BLEND_S2X] = rp[BLEND_T2X] = rp[RESOLVE] =
+        vk_render_pass(&t->format, 1, VK_FORMAT_UNDEFINED, 1);
+    static const bool used[3][NPASS] = {  // [mode][pass]
+        {[EDGES] = 1, [WEIGHTS] = 1, [BLEND] = 1},
+        {[EDGES] = 1, [WEIGHTS] = 1, [BLEND] = 1, [BLEND_T2X] = 1, [RESOLVE] = 1},
+        {[EDGES] = 1, [WEIGHTS] = 1, [SEPARATE] = 1, [BLEND_S2X] = 1}};
     for (int i = 0; i < NPASS; i++)
-        if ((t2x || i <= BLEND) && !(p[i] = pipeline(i, rp[i]))) return NULL;
+        if (used[mode][i] && !(p[i] = pipeline(i, rp[i]))) return NULL;
     return z;
 }
 
-// Edges and blending weights of src (subsample: -1 for 1x, else the T2x jitter's 0 / 1).
+// Edges of src and its blending weights into weights (sub: the subsample indices, NULL for 1x).
 static void edges_and_weights(VkCommandBuffer cb, Size *z, const VkPipeline *p, const VkRenderPass *rp, VkImageView src,
-                              int subsample) {
+                              Img *weights, const float *sub) {
     VkClearColorValue zero = {{0, 0, 0, 0}};
     VkImageSubresourceRange all = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(cb, z->edges.image, VK_IMAGE_LAYOUT_GENERAL, &zero, 1, &all);
     vk_full_barrier(cb);
     VkSampler linear = vk_default_sampler(true), point = vk_default_sampler(false);
     VkDescriptorImageInfo color = {linear, src, VK_IMAGE_LAYOUT_GENERAL};
-    pass(cb, p[EDGES], rp[EDGES], z->edges.view, z->edges.w, z->edges.h, &color, 1, subsample);
+    pass(cb, p[EDGES], rp[EDGES], z->edges.view, z->edges.w, z->edges.h, &color, 1, sub);
     VkDescriptorImageInfo tables[3] = {{linear, z->edges.view, VK_IMAGE_LAYOUT_GENERAL},
                                        {linear, area.view, VK_IMAGE_LAYOUT_GENERAL},
                                        {point, search.view, VK_IMAGE_LAYOUT_GENERAL}};
-    pass(cb, p[WEIGHTS], rp[WEIGHTS], z->weights.view, z->edges.w, z->edges.h, tables, 3, subsample);
+    pass(cb, p[WEIGHTS], rp[WEIGHTS], weights->view, z->edges.w, z->edges.h, tables, 3, sub);
 }
 
 
 bool vk_smaa(const VkPostAa *t) {
     VkPipeline p[NPASS];
     VkRenderPass rp[NPASS];
-    Size *z = prepare(t, false, p, rp);
+    Size *z = prepare(t, MODE_1X, p, rp);
     if (!z) return false;
     VkCommandBuffer cb = vk_cmd();
     vk_full_barrier(cb);
-    edges_and_weights(cb, z, p, rp, t->src, -1);
+    edges_and_weights(cb, z, p, rp, t->src, &z->weights, NULL);
     VkSampler linear = vk_default_sampler(true);
     VkDescriptorImageInfo blend[2] = {{linear, t->src, VK_IMAGE_LAYOUT_GENERAL}, {linear, z->weights.view, VK_IMAGE_LAYOUT_GENERAL}};
-    pass(cb, p[BLEND], rp[BLEND], t->dst, t->w, t->h, blend, 2, -1);
+    pass(cb, p[BLEND], rp[BLEND], t->dst, t->w, t->h, blend, 2, NULL);
     static bool logged;
     if (!logged) logged = true, LOG("[vk] SMAA 1x draws in place of the game's FXAA, %ux%u\n", t->w, t->h);
+    return true;
+}
+
+bool vk_smaa_s2x(const VkPostAa *t, VkImageView ms) {
+    VkPipeline p[NPASS];
+    VkRenderPass rp[NPASS];
+    Size *z = prepare(t, MODE_S2X, p, rp);
+    if (!z) return false;
+    VkCommandBuffer cb = vk_cmd();
+    vk_full_barrier(cb);
+    VkSampler linear = vk_default_sampler(true), point = vk_default_sampler(false);
+    for (int k = 0; k < 2; k++) {
+        VkDescriptorImageInfo in = {point, ms, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        float which[4] = {(float)k};
+        pass(cb, p[SEPARATE], rp[SEPARATE], z->sample[k].view, t->w, t->h, &in, 1, which);
+    }
+    edges_and_weights(cb, z, p, rp, z->sample[0].view, &z->weights, s2x_sub[0]);
+    edges_and_weights(cb, z, p, rp, z->sample[1].view, &z->weights1, s2x_sub[1]);
+    VkDescriptorImageInfo blend[4] = {{linear, z->sample[0].view, VK_IMAGE_LAYOUT_GENERAL},
+                                      {linear, z->weights.view, VK_IMAGE_LAYOUT_GENERAL},
+                                      {linear, z->sample[1].view, VK_IMAGE_LAYOUT_GENERAL},
+                                      {linear, z->weights1.view, VK_IMAGE_LAYOUT_GENERAL}};
+    pass(cb, p[BLEND_S2X], rp[BLEND_S2X], t->dst, t->w, t->h, blend, 4, NULL);
+    static bool logged;
+    if (!logged) logged = true, LOG("[vk] SMAA S2x resolves the 3D scene, %ux%u\n", t->w, t->h);
     return true;
 }
 
 bool vk_smaa_t2x(const VkPostAa *t, VkImageView velocity, VkImageView reactive, int phase, bool history) {
     VkPipeline p[NPASS];
     VkRenderPass rp[NPASS];
-    Size *z = prepare(t, true, p, rp);
+    Size *z = prepare(t, MODE_T2X, p, rp);
     if (!z) return false;
     VkCommandBuffer cb = vk_cmd();
     vk_full_barrier(cb);
     VkSampler linear = vk_default_sampler(true), point = vk_default_sampler(false);
     Img *cur = &z->hist[z->cur], *prev = &z->hist[z->cur ^ 1];
     if (phase < 0) {  // no jitter, no vectors this frame: SMAA 1x of the image, through the history image (in place)
-        edges_and_weights(cb, z, p, rp, t->src, -1);
+        edges_and_weights(cb, z, p, rp, t->src, &z->weights, NULL);
         VkDescriptorImageInfo blend[2] = {{linear, t->src, VK_IMAGE_LAYOUT_GENERAL}, {linear, z->weights.view, VK_IMAGE_LAYOUT_GENERAL}};
-        pass(cb, p[BLEND], rp[BLEND], cur->view, t->w, t->h, blend, 2, -1);
+        pass(cb, p[BLEND], rp[BLEND], cur->view, t->w, t->h, blend, 2, NULL);
         VkImageCopy c = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1},
                          .extent = {t->w, t->h, 1}};
         vkCmdCopyImage(cb, cur->image, VK_IMAGE_LAYOUT_GENERAL, t->dst_image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
@@ -326,17 +396,19 @@ bool vk_smaa_t2x(const VkPostAa *t, VkImageView velocity, VkImageView reactive, 
         z->hist_ok = false;
         return true;
     }
-    edges_and_weights(cb, z, p, rp, t->src, phase);
+    // T2x: (1, 1, 1, 0) for the first jitter, (2, 2, 2, 0) the second
+    float s = (float)(phase + 1), sub[4] = {s, s, s, 0.0f};
+    edges_and_weights(cb, z, p, rp, t->src, &z->weights, sub);
     VkDescriptorImageInfo blend[3] = {{linear, t->src, VK_IMAGE_LAYOUT_GENERAL},
                                       {linear, z->weights.view, VK_IMAGE_LAYOUT_GENERAL},
                                       {linear, velocity, VK_IMAGE_LAYOUT_GENERAL}};
-    pass(cb, p[BLEND_T2X], rp[BLEND_T2X], cur->view, t->w, t->h, blend, 3, phase);
+    pass(cb, p[BLEND_T2X], rp[BLEND_T2X], cur->view, t->w, t->h, blend, 3, sub);
     bool use_prev = history && z->hist_ok;  // (else the resolve blends this frame with itself: just this frame)
     VkDescriptorImageInfo resolve[4] = {{point, cur->view, VK_IMAGE_LAYOUT_GENERAL},
                                         {linear, use_prev ? prev->view : cur->view, VK_IMAGE_LAYOUT_GENERAL},
                                         {point, use_prev ? velocity : still.view, VK_IMAGE_LAYOUT_GENERAL},
                                         {linear, reactive ? reactive : still.view, VK_IMAGE_LAYOUT_GENERAL}};
-    pass(cb, p[RESOLVE], rp[RESOLVE], t->dst, t->w, t->h, resolve, 4, phase);
+    pass(cb, p[RESOLVE], rp[RESOLVE], t->dst, t->w, t->h, resolve, 4, sub);
     z->cur ^= 1;
     z->hist_ok = true;
     static bool logged;

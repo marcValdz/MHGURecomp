@@ -275,8 +275,8 @@ Every setting is also in `mhgurecomp.ini`, with a comment above each one that ex
   to the sides)
 - `[Anti-aliasing]`: `MSAA` (Off / 2x / 4x / 8x), `FXAA` (On / Off), `FXAAMode` (Original / 3_11: FXAA 3.11 in
   place of GU's FXAA, sharper textures; default Original), `AntiAliasing` (FXAA / SMAA: SMAA 1x in place of
-  any FXAA / SMAAT2x: SMAA with the camera jittered and the last two frames combined along their motion; default
-  FXAA)
+  any FXAA / SMAAS2x: SMAA over MSAA 2x, each sample through SMAA, MSAA set to 2x while it is on / SMAAT2x: SMAA with
+  the camera jittered and the last two frames combined along their motion; default FXAA)
 - `[Upscaler]`: `FSR` (Off / On, default Off), `FSRQuality` (NativeAA / Quality / Balanced / Performance /
   UltraPerformance), `Sharpness`. FSR replaces MSAA and FXAA while it is on. Details: `docs/FSR-PORT.md`
 - `[Graphics]`: `DrawDistance` (how far away people in the villages and the Hubs are still drawn: 1 = the game's,

@@ -181,7 +181,9 @@ float config_live_fov(void) { return get_float(&live_fov); }
 float config_live_mouse_sensitivity(void) { return get_float(&live_mouse); }
 float config_live_draw_distance(void) { return get_float(&live_draw); }
 int config_live_fxaa(void) { return runtime_fsr ? 0 : SDL_GetAtomicInt(&live_fxaa); }
-int config_live_msaa(void) { return runtime_fsr ? 1 : SDL_GetAtomicInt(&live_msaa); }
+int config_live_msaa(void) {  // (SMAA S2x: MSAA 2x whatever MSAA says)
+    return runtime_fsr ? 1 : SDL_GetAtomicInt(&live_aa) == AA_SMAA_S2X ? 2 : SDL_GetAtomicInt(&live_msaa);
+}
 int config_live_vsync(void) { return SDL_GetAtomicInt(&live_vsync); }
 int config_live_menu_confirm(void) { return SDL_GetAtomicInt(&live_menu_confirm); }
 int config_live_face_buttons(void) { return SDL_GetAtomicInt(&live_face); }

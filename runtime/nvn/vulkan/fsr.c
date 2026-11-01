@@ -54,10 +54,16 @@
 
 bool g_fsr_on;
 bool g_temporal_on;
+bool g_s2x_on;
 
 static uint32_t rw, rh, ow, oh;  // render size, output size (SMAA T2x: both the render size)
 static bool t2x_on, t2x_ready, t2x_failed;  // SMAA T2x runs (fsr.h g_temporal_on); its images and pipelines are made / could not be
 static bool logging;
+// SMAA S2x: the 3D scene, as the last frame's draws saw it (the render-size colour target most of its depth-writing
+// draws went to; during a frame the moving-object mask, drawn first, can lead the count when it is resolved), and
+// whether S2x resolved this frame's (vk_s2x_done)
+static void *s2x_scene;  // (its backend: compared, never followed)
+static bool s2x_frame;
 
 // ================================================================== stand-ins (the output-size images)
 typedef struct {
@@ -1464,7 +1470,7 @@ static void frame_begin(void) {
     menu_models_late = menu_2d && menu_2d_scene < 16 ? menu_models : 0;
     menu_cams_late = menu_cams;
     menu_2d = false, menu_2d_scene = menu_models = menu_cams = 0;
-    redirect = hud_seen = frame_fsr = false;
+    redirect = hud_seen = frame_fsr = s2x_frame = false;
     h_draws = 0;
     memset(depths, 0, sizeof depths);
     matched_seq = 0;
@@ -1789,7 +1795,7 @@ void vk_fsr_draw(const FsrDraw *d) {
         if (main_camera_draw(d)) menu_models++;  // (menus, see the top)
         else if (menu_camera_draw(d)) menu_cams++;
     }
-    if (hud_seen || !g_h || !d->color0) return;
+    if (g_s2x_on || hud_seen || !g_h || !d->color0) return;  // (SMAA S2x: only the count above)
     if (d->color0 == g_h) {
         bool post = d->count <= 6;
         bool reads_rt = false;
@@ -1865,7 +1871,35 @@ static bool t2x_present(void) {
     return want;
 }
 
+// SMAA S2x, once a frame: on or off as [Anti-aliasing] AntiAliasing says (live; never with FSR); while on, the 3D scene
+// of the frame that ends is the one the next frame's MSAA resolve gives S2x.
+static void s2x_present(void) {
+    bool want = !g_fsr_on && config_live_aa() == AA_SMAA_S2X;
+    if (want != g_s2x_on) {
+        g_s2x_on = want;
+        rw = g_render_size[0], rh = g_render_size[1];  // (the size vk_fsr_draw counts scene draws at)
+        LOG("[s2x] SMAA S2x %s\n", want ? "on" : "off");
+        if (!want) { frame_open = false; return; }
+    }
+    if (!g_s2x_on) return;
+    int best = -1;
+    for (int i = 0; i < 4; i++) if (colors[i].t && (best < 0 || colors[i].n > colors[best].n)) best = i;
+    s2x_scene = frame_open && best >= 0 && colors[best].n >= 16 ? colors[best].t->backend : NULL;
+    bool done = frame_open && s2x_frame;
+    static int last = -1, nlog;
+    if ((int)done != last && nlog++ < 500)
+        LOG("[s2x] frame %llu: %s\n", (unsigned long long)g_present_count + 1,
+            done ? "SMAA S2x" : "SMAA 1x: no 3D scene in MSAA 2x this frame");
+    last = done;
+    frame_open = false;
+}
+
+bool vk_s2x_target(TexBackend *b) { return g_s2x_on && frame_open && s2x_scene && s2x_scene == (void *)b; }
+void vk_s2x_done(void) { s2x_frame = true; }
+bool vk_s2x_resolved(void) { return frame_open && s2x_frame; }
+
 NvnTexture *vk_fsr_present(NvnTexture *t) {
+    s2x_present();  // (before T2x's: from T2x to S2x, this frame's count is still there)
     if (!g_fsr_on && !t2x_present()) return t;
     NvnTexture *show = t;
     if (redirect) {

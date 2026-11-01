@@ -147,6 +147,7 @@ typedef struct TexBackend {
                             // game's RGBA8 render target (textures.c vk_rt_widen)
     uint64_t ms_models;     // (colour) the frame 3D models (depth-writing draws) were last drawn into this image, once
                             // a pass without MSAA did (g_present_count; menus: exec.c ms_expand), 0 none lately
+    bool ms_sampled;        // (of a multisampled image) shaders may read it too: SMAA S2x (smaa.c)
 } TexBackend;
 
 bool vk_wide_rt_on(void);  // (textures.c) RGBA8 render targets as RGBA16 UNORM ([Graphics] SmoothGradients)
@@ -206,6 +207,9 @@ bool vk_smaa(const VkPostAa *t);  // SMAA 1x (smaa.c); false: not drawn
 // reactive (or VK_NULL_HANDLE): where history is dropped (0..1, fsr.c's reactive mask); history false: the last frame
 // does not continue into this one (a cut). false: not drawn.
 bool vk_smaa_t2x(const VkPostAa *t, VkImageView velocity, VkImageView reactive, int phase, bool history);
+// SMAA S2x as the resolve of a multisampled image (exec.c vk_ms_resolve): ms = a view of the 2x image in
+// SHADER_READ_ONLY_OPTIMAL layout, t->dst = the resolved image (t->src unused). false: not drawn (resolve it as usual).
+bool vk_smaa_s2x(const VkPostAa *t, VkImageView ms);
 
 // ---- device / window (device.c)
 void vk_save_png(const char *path, const uint8_t *rgba, uint32_t w, uint32_t h);
