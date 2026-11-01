@@ -69,7 +69,7 @@ static uint32_t area_addr(void) {
 static void as_village(Cpu *c, uint32_t fn) {
     uint32_t a = area_addr();
     uint8_t was = a ? LD8(a) : 0xff;
-    bool flip = g_village && hub_area(was);
+    bool flip = g_village && config_live_village_in_hub() && hub_area(was);
     if (flip) ST8(a, AREA_VILLAGE);
     fnhook_call_original(c, fn);
     if (flip) ST8(a, was);
@@ -100,6 +100,7 @@ static bool locked_village_quest(Cpu *c, uint32_t q) {
 
 static void quest_filter(Cpu *c) {
     uint32_t q = c->r[1], type = c->r[2];
+    if (!config_live_village_in_hub()) { fnhook_call_original(c, FN_QUEST_FILTER); return; }
     if (g_village && hub_area((uint8_t)type)) c->r[2] = AREA_VILLAGE;
     fnhook_call_original(c, FN_QUEST_FILTER);
     if ((c->r[0] & 1) && hub_area((uint8_t)type) && locked_village_quest(c, q)) c->r[0] = 0;
@@ -136,7 +137,7 @@ static void quest_lookup(Cpu *c) {
     uint32_t sel = c->r[0], q = c->r[1], args[2] = {c->r[0], c->r[1]};
     fnhook_call_original(c, FN_QUEST_LOOKUP);
     uint32_t a = area_addr();
-    if (c->r[0] || !sel || !q || q > 9999999 || !a || !hub_area(LD8(a))) return;
+    if (c->r[0] || !config_live_village_in_hub() || !sel || !q || q > 9999999 || !a || !hub_area(LD8(a))) return;
     static uint32_t failed[16];  // (asked every frame for what the board shows: don't load what isn't there again)
     for (int i = 0; i < 16; i++) if (failed[i] == q) return;
     if (locked_village_quest(c, q)) {
@@ -187,8 +188,10 @@ static void ui_update(Cpu *c) {
     held = b;
     uint32_t ui = c->r[0], a = area_addr();
     uint8_t st = LD8(ui + UI_STATE);
-    if (a && hub_area(LD8(a)) && (st == UI_RANK_MENU || st == UI_STAR_MENU) &&
-        (pressed & ((1ull << BTN_L) | (1ull << BTN_R)))) {
+    bool on = config_live_village_in_hub();
+    if (a && hub_area(LD8(a)) && ((on && (st == UI_RANK_MENU || st == UI_STAR_MENU) &&
+                                   (pressed & ((1ull << BTN_L) | (1ull << BTN_R)))) ||
+                                  (!on && g_village))) {  // (turned off in the settings menu: back to the Hub's quests)
         g_village = !g_village;
         reload_list(c);
         ST8(ui + UI_STATE, 0);  // (lays the menu out again)
@@ -196,9 +199,10 @@ static void ui_update(Cpu *c) {
     as_village_menu(c, FN_UI_UPDATE);
 }
 
+// The hooks are set whatever the setting: each follows [Village Quests] VillageQuestsInHub as it is now (a Save in the
+// settings menu turns it on or off; when off, the counter goes back to the Hub's quests the next time it updates).
 void villagehub_init(void) {
     g_trace = getenv("MHGU_VQ_TRACE") != NULL;
-    if (!g_config.village_in_hub) return;
     g_path = hle_alloc(64);
     fnhook_set(FN_QUEST_FILTER, hle_register("villagehub:quest_filter", quest_filter));
     fnhook_set(FN_QUEST_LOOKUP, hle_register("villagehub:quest_lookup", quest_lookup));
