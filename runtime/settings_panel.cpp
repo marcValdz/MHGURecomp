@@ -1226,7 +1226,7 @@ std::vector<Row> main_rows() {
                 r.back().value = tr("Off (FSR)");
             }
         }
-        add_choice(r, "aa", "Anti-aliasing", c.aa, {"FXAA", "SMAA", "SMAA S2x", "SMAA T2x", "SMAA 4x"},
+        add_choice(r, "aa", "Anti-aliasing", c.aa, {"FXAA", "CMAA2", "SMAA", "SMAA S2x", "SMAA T2x", "SMAA 4x"},
                    [](int v) { c.aa = v; }, ini("AntiAliasing"));
         if (g_config.fsr) {
             r.back().cold = true;

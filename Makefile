@@ -247,6 +247,9 @@ $(O)/fsr/src/ffx_fsr3_glsl.c.o: FSRFLAGS += -DFFX_GPU_DIR='"$(FFX_GPU)"' -DFFX_P
 $(O)/fsr/src/ffx_fsr3_glsl.c.o: $(wildcard $(FFX_GPU)/*.h $(FFX_GPU)/*/*.h $(FFX_PASS)/*.glsl)
 RTFLAGS  += -I$(FSR)/include
 .DEFAULT_GOAL := all
+# CMAA2 (runtime/nvn/vulkan/cmaa2.c): third_party/cmaa2/CMAA2.hlsl, embedded with .incbin, compiled from the HLSL at run
+# time; Apache-2.0, from github.com/GameTechDev/CMAA2 with two changes for glslang (marked at its top).
+$(O)/rt/nvn/vulkan/cmaa2.o: third_party/cmaa2/CMAA2.hlsl
 # SMAA (runtime/nvn/vulkan/smaa.c): third_party/smaa = SMAA.hlsl, embedded with .incbin (a path relative to the
 # directory make runs in), and its area / search textures as C arrays; MIT, unchanged from github.com/iryoku/smaa.
 $(O)/rt/nvn/vulkan/smaa.o: third_party/smaa/SMAA.hlsl third_party/smaa/Textures/AreaTex.h third_party/smaa/Textures/SearchTex.h

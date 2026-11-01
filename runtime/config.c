@@ -180,9 +180,9 @@ static const char DEFAULT_INI[] =
     "; Default: Original\n"
     "FXAAMode = Original\n"
     "\n"
-    "; What draws in place of GU's FXAA: FXAA (the settings above), SMAA, SMAAS2x (on MSAA 2x),\n"
-    "; SMAAT2x (over two frames) or SMAA4x (both)\n"
-    "; FXAA, SMAA, SMAAS2x, SMAAT2x, SMAA4x\n"
+    "; What draws in place of GU's FXAA: FXAA (the settings above), CMAA2, or SMAA: 1x, S2x (on MSAA 2x),\n"
+    "; T2x (over two frames) or 4x (both)\n"
+    "; FXAA, CMAA2, SMAA, SMAAS2x, SMAAT2x, SMAA4x\n"
     "; Default: FXAA\n"
     "AntiAliasing = FXAA\n"
     "\n"
@@ -710,7 +710,7 @@ const ConfigSetting g_settings[] = {
     {"Anti-aliasing", "MSAA", SET_CHOICE, F(msaa), 0, 0, 0, "Off|none|0|1|1x,2x|2,4x|4,8x|8", msaa_values, false, ERR_MISC},
     ON_OFF("Anti-aliasing", "FXAA", fxaa, false),
     {"Anti-aliasing", "FXAAMode", SET_CHOICE, F(fxaa_mode), 0, 0, 0, "Original,3_11", NULL, false, ERR_MISC},
-    {"Anti-aliasing", "AntiAliasing", SET_CHOICE, F(aa), 0, 0, 0, "FXAA,SMAA,SMAAS2x,SMAAT2x,SMAA4x", NULL, false,
+    {"Anti-aliasing", "AntiAliasing", SET_CHOICE, F(aa), 0, 0, 0, "FXAA,CMAA2,SMAA,SMAAS2x,SMAAT2x,SMAA4x", NULL, false,
      ERR_MISC},
     ON_OFF("Upscaler", "FSR", fsr, true),
     {"Upscaler", "FSRQuality", SET_CHOICE, F(fsr_quality), 0, 0, 0,

@@ -3904,9 +3904,9 @@ static void post_aa_drawn(void) {
 }
 
 // FXAA off (settings): the game's FXAA pass (recognised by its shader) copies its input instead; FXAAMode = 3_11 draws
-// FXAA 3.11 there (fxaa_311); AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c), SMAAS2x copies its
-// input too, the scene resolved by S2x already (ms_resolve_s2x), and so do SMAAT2x and SMAA4x, the jittered camera's
-// frames resolved at the start of the HUD instead (fsr.c).
+// FXAA 3.11 there (fxaa_311); AntiAliasing = CMAA2 or SMAA draws CMAA2 (cmaa2.c) or SMAA 1x (smaa.c) there whatever
+// FXAA says, SMAAS2x copies its input too, the scene resolved by S2x already (ms_resolve_s2x), and so do SMAAT2x and
+// SMAA4x, the jittered camera's frames resolved at the start of the HUD instead (fsr.c).
 static void copy_texture(const TexRef *src, const TexRef *dst, uint64_t flags);
 static bool fxaa_skipped(Prog *pr) {
     if (prog_fs_hash(pr) == FXAA_FS_HASH) {
@@ -3922,6 +3922,13 @@ static bool fxaa_skipped(Prog *pr) {
     if (!src || src == st.rt.color[0]) return false;
     if (aa == AA_SMAA_S2X && !vk_s2x_resolved()) aa = AA_SMAA;  // (S2x did not resolve the scene this frame: SMAA 1x)
     if (aa >= AA_SMAA_T2X && !g_temporal_on) aa = AA_SMAA;  // (until T2x / 4x runs, from the next frame on: SMAA 1x)
+    if (aa == AA_CMAA2) {  // (not possible: the game's own pass draws)
+        VkPostAa t;
+        if (!post_aa_target(src, &t) || !vk_cmaa2(&t)) return false;
+        post_aa_drawn();
+        gp_next_note = "";
+        return true;
+    }
     if (aa == AA_SMAA) {  // (not possible: the game's own pass draws)
         VkPostAa t;
         if (!post_aa_target(src, &t) || !vk_smaa(&t)) return false;

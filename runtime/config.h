@@ -13,7 +13,8 @@ enum { FACE_POSITION, FACE_LABEL };
 enum { COMBO_LENIENT, COMBO_STRICT };  // [Controls] ComboInputWindow (runtime/hle/combowin.c)
 enum { MENU_CONFIRM_ORIGINAL, MENU_CONFIRM_SOUTH, MENU_CONFIRM_EAST };
 enum { FXAA_ORIGINAL, FXAA_311 };  // [Anti-aliasing] FXAAMode (runtime/nvn/vulkan/exec.c)
-enum { AA_FXAA, AA_SMAA, AA_SMAA_S2X, AA_SMAA_T2X, AA_SMAA_4X };  // [Anti-aliasing] AntiAliasing (nvn/vulkan/smaa.c, fsr.c)
+// [Anti-aliasing] AntiAliasing (nvn/vulkan/cmaa2.c, smaa.c, fsr.c)
+enum { AA_FXAA, AA_CMAA2, AA_SMAA, AA_SMAA_S2X, AA_SMAA_T2X, AA_SMAA_4X };
 #define AA_USES_S2X(aa) ((aa) == AA_SMAA_S2X || (aa) == AA_SMAA_4X)  // (they render the scene with MSAA 2x)
 
 // [Keybinds]: the keyboard and mouse controls (runtime/host_input.c), in the file's order. Each takes up to two keys

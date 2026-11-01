@@ -201,6 +201,7 @@ const char *vk_builtin_source(const char *name);     // (the GLSL of one)
 // colour target it draws into (format, size w x h), both in GENERAL layout; recorded outside a render pass
 // (src_image, level: the input's image and the level of the target dst views, for copies)
 typedef struct { VkImageView src, dst; VkImage dst_image, src_image; VkFormat format; uint32_t w, h, level; } VkPostAa;
+bool vk_cmaa2(const VkPostAa *t);  // CMAA2 (cmaa2.c); false: not drawn
 bool vk_smaa(const VkPostAa *t);  // SMAA 1x (smaa.c); false: not drawn
 // SMAA T2x in place (t->src and t->dst the same image; fsr.c at the start of the HUD): velocity = the motion vectors
 // (previous position - current, in pixels); phase: the frame's jitter (camjit_t2x_phase), -1 for none (then SMAA 1x);

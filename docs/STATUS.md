@@ -129,6 +129,8 @@ Fixed on the way (2026-10-20):
   in the town, at a 1280x720 render size and in quest 101. The same test for 3_11 (town, both GPUs): also all zero. The
   game's fma()s and the order of its sums had to stay: without them 0.15% of pixels differed, as exact ties go by rounding.
   Not looking again at a search side that hasn't moved gives the same picture, but took 1.75 ms instead of 1.54 on the iGPU.
+  AntiAliasing = CMAA2 draws Intel's CMAA2 there whatever FXAA says (cmaa2.c: third_party/cmaa2's HLSL compiled by
+  shaderc, Ultra preset); a target that is not RGBA8 keeps the game's pass.
   AntiAliasing = SMAA draws SMAA 1x there whatever FXAA says (smaa.c: third_party/smaa's SMAA.hlsl through its GLSL
   path with shaderc, Ultra preset: luma edges, blending weights, then the blend into the game's target).
   AntiAliasing = SMAAT2x is SMAA T2x: fsr.c runs FSR's frame structure, camera jitter and motion vectors at the render
