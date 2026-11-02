@@ -4,16 +4,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Writes to a cache file (path in `out`) the archive `src` with the two icons swapped in its button font texture, and
-// the title's "Press" button drawn as the bottom button's.
-// False when the archive has neither, or they are laid out in a way not known here: the caller keeps `src`.
-bool btnicons_patch(const char *src, char *out, size_t outsz);
+// What the button icons look like in the archive `src` (romfs.c, at start, as the mods left it): the button font
+// (menus, messages), the quest HUD's prompt button and the title's "Press" button, each with the bottom button's
+// version. How many regions are known after that: btnicons_known().
+void btnicons_learn(const char *src);
+int btnicons_known(void);
 
-// The field prompts' button (one sprite for every prompt, in the quest HUD texture): what it looks like in the
-// archive `src` (romfs.c, at start); a BC3 texture's level 0 as the game copies it in, blocks row after row, which may
-// be that texture (nvn/vulkan/exec.c, render thread); a texture going away (nvn/objects.c); and which button it shows,
-// set every frame from the game's thread (runtime/hle/gameconfirm.c). The textures are NvnTexture *.
-void btnicons_learn_hud(const char *src);
+// The renderer's copies of those textures: a BC3 texture's level 0 as the game copies it in, blocks row after row,
+// which may be one (nvn/vulkan/exec.c, render thread); a texture going away (nvn/objects.c); and which button each
+// shows, set every frame from the game's thread (runtime/hle/gameconfirm.c): the font and the title, and the prompts'
+// button. The textures are NvnTexture *.
 void btnicons_copied(void *texture, uint8_t *blocks, uint32_t w, uint32_t h, uint32_t format);
 void btnicons_texture_gone(void *texture);
-void btnicons_hud_bottom(bool bottom);
+void btnicons_set(bool menus, bool prompts);

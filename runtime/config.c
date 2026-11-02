@@ -357,7 +357,7 @@ static const char DEFAULT_INI[] =
     "\n"
     "; Confirm button in the game. South, as in newer Monster Hunter games: menus confirm with the bottom button and go\n"
     "; back with the right one; the bottom button talks and opens boxes (in towns the right one rolls), the right one\n"
-    "; gathers and carves. The button icons follow at the next start. Needs FaceButtons = Position.\n"
+    "; gathers and carves. The button icons follow at once. Needs FaceButtons = Position.\n"
     "; Original, South (bottom button)\n"
     "; Default: Original\n"
     "GameConfirm = Original\n"
@@ -767,7 +767,7 @@ const ConfigSetting g_settings[] = {
     {"Controls", "FaceButtons", SET_CHOICE, F(face_buttons), 0, 0, 0, "Position|positional|nintendo,Label|labels|xbox",
      NULL, false, ERR_MISC},
     {"Controls", "MenuConfirm", SET_CHOICE, F(menu_confirm), 0, 0, 0, "Original,South,East", NULL, false, ERR_CONFIRM},
-    {"Controls", "GameConfirm", SET_CHOICE, F(game_confirm), 0, 0, 0, "Original,South", NULL, true, ERR_CONFIRM},
+    {"Controls", "GameConfirm", SET_CHOICE, F(game_confirm), 0, 0, 0, "Original,South", NULL, false, ERR_CONFIRM},
     ON_OFF("Controls", "BackgroundInput", background_input, false),
     ON_OFF("Controls", "MenuChord", menu_chord, false),
     {"Controls", "ComboInputWindow", SET_CHOICE, F(combo_window), 0, 0, 0, "Lenient,Strict", NULL, false, ERR_MISC},

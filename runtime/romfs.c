@@ -219,35 +219,22 @@ static File *file_in(Dir *d, const char *name) {
     return NULL;
 }
 
-// [Controls] GameConfirm = South: the archives with the button font, as the mods left them, with the bottom and the
-// right button's icons swapped (btnicons.c): loc/arc/resident.arc (towns) and each language's arc/quest_<lang>.arc,
-// and each language's arc/title_<lang>.arc for the title's "Press" button
-static void swap_button_icons(Dir *root) {
+// [Controls] GameConfirm: what the button icons look like in the archives as the mods left them (btnicons.c), so the
+// setting can swap them live: loc/arc/resident.arc (towns), each language's arc/quest_<lang>.arc and arc/title_<lang>.arc
+static void learn_button_icons(Dir *root) {
     Dir *nx = subdir(root, "nativeNX");
-    File *arcs[64];
-    int n = 0;
-    if ((arcs[n] = file_in(subdir(subdir(nx, "loc"), "arc"), "resident.arc"))) n++;
-    for (int i = 0; nx && i < nx->ndirs && n < 64; i++) {
+    File *f = file_in(subdir(subdir(nx, "loc"), "arc"), "resident.arc");
+    if (f) btnicons_learn(f->path);
+    for (int i = 0; nx && i < nx->ndirs; i++) {
         char name[300];
-        snprintf(name, sizeof name, "quest_%s.arc", nx->dirs[i]->name);
-        if ((arcs[n] = file_in(subdir(nx->dirs[i], "arc"), name))) btnicons_learn_hud(arcs[n++]->path);
-        snprintf(name, sizeof name, "title_%s.arc", nx->dirs[i]->name);
-        if (n < 64 && (arcs[n] = file_in(subdir(nx->dirs[i], "arc"), name))) n++;
+        const char *kinds[] = {"quest", "title"};
+        for (int k = 0; k < 2; k++) {
+            snprintf(name, sizeof name, "%s_%s.arc", kinds[k], nx->dirs[i]->name);
+            if ((f = file_in(subdir(nx->dirs[i], "arc"), name))) btnicons_learn(f->path);
+        }
     }
-    int swapped = 0;
-    for (int i = 0; i < n; i++) {
-        char out[1200];
-        struct stat st;
-        if (!btnicons_patch(arcs[i]->path, out, sizeof out) || stat(out, &st)) continue;
-        if (!arcs[i]->orig) arcs[i]->orig = strdup(arcs[i]->path);
-        free(arcs[i]->path);
-        arcs[i]->path = strdup(out);
-        arcs[i]->size = (uint64_t)st.st_size;
-        swapped++;
-    }
-    LOG("[romfs] button icons: bottom and right swapped in %d of %d archives (GameConfirm = South)\n", swapped, n);
+    LOG("[romfs] button icons: %d places known (GameConfirm swaps them live)\n", btnicons_known());
 }
-
 static void sort_tree(Dir *d) {
     if (d->ndirs) qsort(d->dirs, d->ndirs, sizeof *d->dirs, by_name_dir);
     if (d->nfiles) qsort(d->files, d->nfiles, sizeof *d->files, by_name_file);
@@ -347,7 +334,7 @@ bool romfs_open(const char *base_dir, const char *const *overlays, int noverlays
     }
     atomic_store(&g_mods_phase, MODS_IDLE);
     uint64_t mods_ns = plat_now_ns() - t0;
-    if (g_config.game_confirm == GAME_CONFIRM_SOUTH && g_config.face_buttons == FACE_POSITION) swap_button_icons(root);
+    learn_button_icons(root);
     sort_tree(root);
     Lists l = {0};
     l.dirs = malloc(sizeof *l.dirs * (l.cd = 64));

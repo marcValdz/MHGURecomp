@@ -144,10 +144,9 @@ towns the hunter's two buttons swap (the bottom one talks and opens boxes; towns
 have no prompt to tell those by), and in quests a box's, the bed's or the camp
 Felyne's prompt takes the bottom button while gathering and carving keep the
 right one (the pad read, 0xdac204, and the hunter's +0x32b4, game_confirm.h).
-Input follows Save at once; the button font's icons are swapped in the archives
-at the next start, and the quest prompts' one button sprite as prompts come and
-go, in the renderer's copy of the HUD texture (runtime/btnicons.c), hence the
-restart mark. Needs FaceButtons = Position. Found by the confirm-on-x Forge plugin
+Input and icons follow Save at once: the button font's, the title's "Press" button's and the quest prompts' one button
+sprite are swapped in the renderer's copies of their textures (runtime/btnicons.c), the prompts' as prompts come and go.
+No restart mark. Needs FaceButtons = Position. Found by the confirm-on-x Forge plugin
 (github.com/lick-mee/mhgu-confirm-on-x), which must be removed with it on: both
 would swap.
 

@@ -279,10 +279,10 @@ int main(int argc, char **argv) {
     config_fsr_running(false);                              // then the saved MSAA and FXAA again
     assert(config_live_msaa()==8 && config_live_fxaa()==1);
     g_config=initial;config_load();assert(config_live_msaa()==8 && config_live_fxaa()==1);
-    // [Controls] GameConfirm: saved and live at once; the button icons follow at the next start
+    // [Controls] GameConfirm: saved and live at once, the button icons too (no restart)
     Config gc = config_editable(); gc.game_confirm = GAME_CONFIRM_SOUTH;
     assert(config_save(&gc, error, sizeof error) && config_live_game_confirm() == GAME_CONFIRM_SOUTH);
-    assert(config_restart_key("GameConfirm") && config_restart_required(&gc));
+    assert(!config_restart_key("GameConfirm") && !config_restart_required(&gc));
     text = read_file(path); assert(strstr(text, "GameConfirm = South")); free(text);
     bad = gc; bad.game_confirm = 2; assert(!config_save(&bad, error, sizeof error));
     g_config = initial; config_load(); assert(config_editable().game_confirm == GAME_CONFIRM_SOUTH);

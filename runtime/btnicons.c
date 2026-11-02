@@ -1,20 +1,19 @@
 // The face button icons for [Controls] GameConfirm = South (btnicons.h), so every prompt shows the button that does
-// it. Two textures draw them, both BC3, one level, block-linear (runtime/nvn/tegra.c):
+// it, as the setting is saved. The icons are in three BC3 textures, one level, block-linear (runtime/nvn/tegra.c). The
+// archives are read once, at start, as the mods left them: where each icon is and what it looks like with the button
+// swapped (a "known" region of a texture). The game fills its textures with a copy it does not show again, so each is
+// told as it is copied in (btnicons_copied): a texture whose region has the bytes of a known one is the renderer's
+// copy to change. Showing the bottom button is then one region upload (renderer_upload_region), and back.
 // - The button font (menus and messages), GUI\02_common\font\button_festa_00_ID: towns use the copy in
 //   loc\arc\resident.arc, quests the one in <language>\arc\quest_<language>.arc. Its top row holds the face buttons
 //   left, top, bottom, right (the game's Y X B A; PlayStation icon mods' Square Triangle Cross Circle) in square
-//   cells of 3/32 of the texture's width (24 pixels in the game's 256 x 256 one, 48 in HD mods' 512 x 512). With
-//   the game's menus confirming with the bottom button, the bottom and the right cell trade places for good: the
-//   patched archive is the source with that entry's new data appended (the other entries stay where they are), in
-//   cache/btnicons/, made once per source file.
+//   cells of 3/32 of the texture's width (24 pixels in the game's 256 x 256 one, 48 in HD mods' 512 x 512). The
+//   bottom and the right cell trade places.
 // - The field prompts' button (gather, carve, open a box...), one sprite for every prompt in the quest HUD texture
 //   GUI\99_texture\HD_hud00_BM_NOMIP (quest_<language>.arc), in its row of L, the left, top, bottom and right face
 //   buttons, and R. Which button a prompt takes depends on the prompt (runtime/hle/gameconfirm.c), so the bottom
-//   and right sprites trade places in the renderer's copy of the texture while it should show the bottom button. The
-//   game fills it with a GPU copy, so it is told as it is copied in, by the bytes of those two sprites as the archive
-//   has them; their blocks are kept, and swapping them is two region uploads.
-// - The title's "Press" button, baked into HD_title00 (title_<language>.arc): drawn as a shape in the same patched
-//   archive, below.
+//   and right sprites trade places only while a prompt should show the bottom button.
+// - The title's "Press" button, baked into HD_title00 (title_<language>.arc): drawn as a shape, below.
 #include "btnicons.h"
 
 #include <math.h>
@@ -57,22 +56,14 @@ static uint8_t *load(const char *path, long *len) {
     return buf;
 }
 
-// A square of BC3 blocks (pixels x, y, size: multiples of 4) of a w x h level 0: its hash, or swapped with another
+
+// A texture's level 0 layout (block-linear), and a rectangle of it (pixels x, y, w, h: multiples of 4) as its blocks
+// row after row, the way renderer_upload_region wants them
 typedef struct { uint32_t w, h, bhl; } Surface;
-static uint64_t rect_hash(const uint8_t *data, Surface s, uint32_t x, uint32_t y, uint32_t size) {
-    uint64_t h = 14695981039346656037ull;
-    for (uint32_t by = y / 4; by < (y + size) / 4; by++)
-        for (uint32_t bx = x / 4; bx < (x + size) / 4; bx++)
-            h = fnv(h, data + tegra_block_offset(bx, by, s.w / 4, s.h / 4, 16, s.bhl), 16);
-    return h;
-}
-static void rect_swap(uint8_t *data, Surface s, uint32_t xa, uint32_t xb, uint32_t y, uint32_t size) {
-    for (uint32_t by = y / 4; by < (y + size) / 4; by++)
-        for (uint32_t i = 0; i < size / 4; i++) {
-            uint8_t *a = data + tegra_block_offset(xa / 4 + i, by, s.w / 4, s.h / 4, 16, s.bhl);
-            uint8_t *b = data + tegra_block_offset(xb / 4 + i, by, s.w / 4, s.h / 4, 16, s.bhl), t[16];
-            memcpy(t, a, 16), memcpy(a, b, 16), memcpy(b, t, 16);
-        }
+static void region_blocks(const uint8_t *data, Surface s, uint32_t x, uint32_t y, uint32_t rw, uint32_t rh, uint8_t *buf) {
+    for (uint32_t r = 0; r < rh / 4; r++)
+        for (uint32_t c = 0; c < rw / 4; c++)
+            memcpy(buf + ((size_t)r * (rw / 4) + c) * 16, data + tegra_block_offset(x / 4 + c, y / 4 + r, s.w / 4, s.h / 4, 16, s.bhl), 16);
 }
 
 // A .tex (BC3, one level) and its size; false for any other
@@ -115,6 +106,9 @@ static uint8_t *arc_entry(const uint8_t *arc, long len, const char *name, uint8_
 #define TITLE_W 2048u
 #define DISC_X 559
 #define DISC_Y 1458
+#define TITLE_X0 ((DISC_X - 40) / 4 * 4)  // (the blocks around the disc's middle: the region this changes)
+#define TITLE_Y0 ((DISC_Y - 40) / 4 * 4)
+#define TITLE_N 84
 #define DISC_ERASE 35.0f  // (the ring reaches 32 pixels from the center)
 #define CROSS_LEN 32.2f   // (half the length of each stroke, to the middle of its square end)
 #define CROSS_HALF 3.9f   // (half the stroke's width)
@@ -189,8 +183,8 @@ static bool title_cross(uint8_t *tex, uint32_t size) {
     Surface s;
     if (!bc3_tex(tex, size, &s) || s.w != TITLE_W || s.h != TITLE_W) return false;
     uint8_t *data = tex + TEX_HEAD;
-    uint32_t x0 = (DISC_X - 40) / 4 * 4, y0 = (DISC_Y - 40) / 4 * 4, n = 84;  // (the blocks around the disc's middle)
-    static uint8_t px[84][84][4];
+    uint32_t x0 = TITLE_X0, y0 = TITLE_Y0, n = TITLE_N;
+    static uint8_t px[TITLE_N][TITLE_N][4];
     for (uint32_t by = 0; by < n / 4; by++)
         for (uint32_t bx = 0; bx < n / 4; bx++) {
             uint8_t blk[16], t[16][4];
@@ -221,149 +215,126 @@ static bool title_cross(uint8_t *tex, uint32_t size) {
     return true;
 }
 
-// An archive being rebuilt: the source with changed entries' data appended (the other entries stay where they are)
-typedef struct { uint8_t *img; size_t len; } NewArc;
-static bool arc_put(NewArc *a, const uint8_t *arc, const uint8_t *e, const uint8_t *data, uint32_t size) {
-    uLongf plen = compressBound(size);
-    uint8_t *packed = malloc(plen);
-    bool ok = packed && compress2(packed, &plen, data, size, Z_DEFAULT_COMPRESSION) == Z_OK && a->len + plen <= 0x7FFFFFFFu;
-    uint8_t *img = ok ? realloc(a->img, a->len + plen) : NULL;
-    if (img) {
-        a->img = img;
-        memcpy(img + a->len, packed, plen);
-        uint8_t *ne = img + (e - arc);
-        wr32(ne + 68, (uint32_t)plen), wr32(ne + 72, (rd32(e + 72) & ~SIZE_MASK) | size), wr32(ne + 76, (uint32_t)a->len);
-        a->len += plen;
-    }
-    free(packed);
-    return img != NULL;
+// ---- what is known, and which of the renderer's textures show it
+enum { KIND_MENU, KIND_HUD };  // the font and the title follow GameConfirm; the prompts' button also the prompt shown
+typedef struct {
+    int kind;
+    uint32_t w, h, x, y, rw, rh;  // the texture's size, and the region (pixels)
+    uint64_t hash;                // of the region's blocks as the archive has them
+    uint8_t *orig, *alt;          // those blocks, and with the bottom button
+} Known;
+typedef struct { uint32_t w, bottom, right, y, size; } HudLayout;  // (by the HUD texture's width: the game's 512 x 512
+static const HudLayout hud_layouts[] = {{512, 96, 128, 408, 32}, {2048, 400, 532, 1648, 100}};  // and HD mods' 2048)
+#define MAX_KNOWN 48
+#define MAX_SEEN 16
+static Known g_known[MAX_KNOWN];  // (learnt at start)
+static int g_nknown;
+static struct { void *t; const Known *k; bool swapped; } g_seen[MAX_SEEN];  // the renderer's textures, and what they show
+static volatile bool g_want[2];  // the bottom button where each kind is drawn
+static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void known_add(int kind, Surface s, uint32_t x, uint32_t y, uint32_t rw, uint32_t rh, uint8_t *orig, uint8_t *alt) {
+    Known k = {kind, s.w, s.h, x, y, rw, rh, fnv(14695981039346656037ull, orig, (size_t)rw * rh), orig, alt};
+    pthread_mutex_lock(&g_lock);
+    bool keep = g_nknown < MAX_KNOWN;
+    for (int i = 0; keep && i < g_nknown; i++)
+        keep = !(g_known[i].kind == kind && g_known[i].w == s.w && g_known[i].h == s.h && g_known[i].x == x &&
+                 g_known[i].y == y && g_known[i].hash == k.hash);
+    if (keep) g_known[g_nknown++] = k;
+    pthread_mutex_unlock(&g_lock);
+    if (!keep) free(orig), free(alt);
 }
 
-bool btnicons_patch(const char *src, char *out, size_t outsz) {
-    struct stat st;
-    if (stat(src, &st)) return false;
-    long long v[2] = {(long long)st.st_size, (long long)st.st_mtime};
-    uint64_t h = fnv(14695981039346656037ull, "2", 1);  // (patch version)
-    h = fnv(fnv(h, src, strlen(src)), v, sizeof v);
-    snprintf(out, outsz, "cache/btnicons/%016llx.arc", (unsigned long long)h);
-    if (!stat(out, &st) && st.st_size > 0) return true;  // (made on an earlier start)
+int btnicons_known(void) { return g_nknown; }
 
+void btnicons_learn(const char *src) {
     long len = 0;
     uint32_t size = 0;
-    uint8_t *arc = load(src, &len), *e = NULL, *tex = NULL;
-    NewArc a = {arc ? malloc((size_t)len) : NULL, (size_t)len};
-    bool ok = false;
-    if (!a.img) goto done;
-    memcpy(a.img, arc, (size_t)len);
-    int changed = 0;
+    uint8_t *arc = load(src, &len), *tex;
     Surface s;
-    if ((tex = arc_entry(arc, len, FONT, &e, &size))) {
-        if (!bc3_tex(tex, size, &s) || s.w != s.h || s.w % 128) {
-            LOG("[romfs] %s: its button icons aren't laid out as known: not swapped\n", src);
+    if (!arc) return;
+    if ((tex = arc_entry(arc, len, FONT, NULL, &size))) {
+        if (bc3_tex(tex, size, &s) && s.w == s.h && s.w % 128 == 0) {
+            uint32_t cell = s.w * 3 / 32, row = cell * 4;  // (a cell's blocks in a row of them: bytes)
+            size_t n = (size_t)2 * cell * cell;
+            uint8_t *o = malloc(n), *a = malloc(n);
+            if (o && a) {
+                region_blocks(tex + TEX_HEAD, s, 2 * cell, 0, 2 * cell, cell, o);  // (the bottom and the right cell)
+                for (uint32_t r = 0; r < cell / 4; r++) {
+                    memcpy(a + (size_t)r * 2 * row, o + (size_t)r * 2 * row + row, row);
+                    memcpy(a + (size_t)r * 2 * row + row, o + (size_t)r * 2 * row, row);
+                }
+                known_add(KIND_MENU, s, 2 * cell, 0, 2 * cell, cell, o, a);
+            } else {
+                free(o), free(a);
+            }
         } else {
-            uint32_t cell = s.w * 3 / 32;
-            rect_swap(tex + TEX_HEAD, s, 2 * cell, 3 * cell, 0, cell);
-            if (!arc_put(&a, arc, e, tex, size)) goto done;
-            changed++;
+            LOG("[romfs] %s: its button icons aren't laid out as known: not swapped\n", src);
         }
         free(tex);
     }
-    if ((tex = arc_entry(arc, len, TITLE, &e, &size))) {
-        if (title_cross(tex, size)) {  // (the game's own 1024 x 1024 one: its letter stays)
-            if (!arc_put(&a, arc, e, tex, size)) goto done;
-            changed++;
+    if ((tex = arc_entry(arc, len, HUD, NULL, &size))) {
+        const HudLayout *l = NULL;
+        if (bc3_tex(tex, size, &s))
+            for (size_t i = 0; i < sizeof hud_layouts / sizeof *hud_layouts; i++)
+                if (hud_layouts[i].w == s.w && s.h == s.w) l = &hud_layouts[i];
+        if (l) {
+            uint32_t rw = l->right + l->size - l->bottom, rowb = rw * 4, sq = l->size * 4, off = (l->right - l->bottom) * 4;
+            size_t n = (size_t)rw * l->size;
+            uint8_t *o = malloc(n), *a = malloc(n);
+            if (o && a) {
+                region_blocks(tex + TEX_HEAD, s, l->bottom, l->y, rw, l->size, o);
+                memcpy(a, o, n);
+                for (uint32_t r = 0; r < l->size / 4; r++) {  // (the two sprites trade places inside it)
+                    memcpy(a + (size_t)r * rowb, o + (size_t)r * rowb + off, sq);
+                    memcpy(a + (size_t)r * rowb + off, o + (size_t)r * rowb, sq);
+                }
+                known_add(KIND_HUD, s, l->bottom, l->y, rw, l->size, o, a);
+            } else {
+                free(o), free(a);
+            }
+        } else {
+            LOG("[romfs] %s: its HUD's buttons aren't laid out as known: the prompts' button stays as it is\n", src);
         }
-        free(tex), tex = NULL;
+        free(tex);
     }
-    if (!changed) goto done;
-
-    mkdir("cache", 0755);
-    mkdir("cache/btnicons", 0755);
-    char tmp[1200];
-    snprintf(tmp, sizeof tmp, "%s.tmp", out);
-    FILE *f = fopen(tmp, "wb");
-    if (!f) goto done;
-    ok = fwrite(a.img, 1, a.len, f) == a.len;
-    ok = fclose(f) == 0 && ok;
-    if (ok) ok = rename(tmp, out) == 0;
-    if (!ok) remove(tmp);
-    else LOG("[romfs] button icons swapped: %s\n", src);
-done:
-    free(arc), free(tex), free(a.img);
-    return ok;
-}
-
-// ---- the field prompts' button
-// Where the bottom and right face buttons are in the HUD texture, by its width: the game's 512 x 512 one and HD
-// mods' 2048 x 2048 (squares around each sprite, on 4-pixel blocks)
-typedef struct { uint32_t w, bottom, right, y, size; } HudLayout;
-static const HudLayout hud_layouts[] = {{512, 96, 128, 408, 32}, {2048, 400, 532, 1648, 100}};
-#define MAX_KNOWN 8
-static struct { const HudLayout *l; uint32_t h; uint64_t bottom, right; } g_known[MAX_KNOWN];  // (learnt at start)
-static int g_nknown;
-// The texture, as copied in: its two sprites' blocks, and whether the renderer's copy has them swapped
-static struct { void *t; const HudLayout *l; uint8_t *bottom, *right; bool swapped; } g_hud;
-static volatile bool g_want;  // the bottom button's sprite where the prompts' button is drawn
-static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
-
-// A square of blocks (pixels, multiples of 4) of a level 0 whose blocks are row after row: hashed as rect_hash does,
-// or copied out of / into a buffer of its own rows
-static uint64_t lin_hash(const uint8_t *lin, uint32_t w, uint32_t x, uint32_t y, uint32_t size) {
-    uint64_t h = 14695981039346656037ull;
-    for (uint32_t by = y / 4; by < (y + size) / 4; by++) h = fnv(h, lin + ((size_t)by * (w / 4) + x / 4) * 16, size * 4);
-    return h;
-}
-static void lin_copy(uint8_t *lin, uint32_t w, uint32_t x, uint32_t y, uint32_t size, uint8_t *buf, bool out) {
-    for (uint32_t i = 0; i < size / 4; i++) {
-        uint8_t *row = lin + ((size_t)(y / 4 + i) * (w / 4) + x / 4) * 16, *b = buf + (size_t)i * size * 4;
-        if (out) memcpy(b, row, size * 4);
-        else memcpy(row, b, size * 4);
+    if ((tex = arc_entry(arc, len, TITLE, NULL, &size))) {
+        size_t n = (size_t)TITLE_N * TITLE_N;
+        uint8_t *o = malloc(n), *a = malloc(n);
+        if (o && a && bc3_tex(tex, size, &s) && s.w == TITLE_W && s.h == TITLE_W) {  // (the game's own 1024 x 1024: a letter, as is)
+            region_blocks(tex + TEX_HEAD, s, TITLE_X0, TITLE_Y0, TITLE_N, TITLE_N, o);
+            if (title_cross(tex, size)) {
+                region_blocks(tex + TEX_HEAD, s, TITLE_X0, TITLE_Y0, TITLE_N, TITLE_N, a);
+                known_add(KIND_MENU, s, TITLE_X0, TITLE_Y0, TITLE_N, TITLE_N, o, a);
+                o = a = NULL;
+            }
+        }
+        free(o), free(a), free(tex);
     }
-}
-
-void btnicons_learn_hud(const char *src) {
-    long len = 0;
-    uint32_t size = 0;
-    uint8_t *arc = load(src, &len), *tex = arc ? arc_entry(arc, len, HUD, NULL, &size) : NULL;
-    Surface s;
-    const HudLayout *l = NULL;
-    if (tex && bc3_tex(tex, size, &s))
-        for (size_t i = 0; i < sizeof hud_layouts / sizeof *hud_layouts; i++)
-            if (hud_layouts[i].w == s.w && s.h == s.w) l = &hud_layouts[i];
-    if (l) {
-        uint64_t b = rect_hash(tex + TEX_HEAD, s, l->bottom, l->y, l->size), r = rect_hash(tex + TEX_HEAD, s, l->right, l->y, l->size);
-        pthread_mutex_lock(&g_lock);
-        bool seen = false;
-        for (int i = 0; i < g_nknown; i++) seen |= g_known[i].bottom == b && g_known[i].right == r;
-        if (!seen && g_nknown < MAX_KNOWN) g_known[g_nknown++] = (typeof(g_known[0])){l, s.h, b, r};
-        pthread_mutex_unlock(&g_lock);
-    } else if (tex) {
-        LOG("[romfs] %s: its HUD's buttons aren't laid out as known: the prompts' button stays as it is\n", src);
-    }
-    free(arc), free(tex);
+    free(arc);
 }
 
 void btnicons_copied(void *t, uint8_t *blocks, uint32_t w, uint32_t h, uint32_t format) {
     if ((format != 0x44 && format != 0x48) || !g_nknown) return;  // (BC3)
-    for (int k = 0; k < g_nknown; k++) {
-        const HudLayout *l = g_known[k].l;
-        if (l->w != w || g_known[k].h != h || lin_hash(blocks, w, l->bottom, l->y, l->size) != g_known[k].bottom) continue;
-        size_t n = (size_t)l->size * l->size;  // (BC3: a byte a pixel)
+    for (int i = 0; i < g_nknown; i++) {
+        const Known *k = &g_known[i];
+        if (k->w != w || k->h != h) continue;
+        uint64_t hh = 14695981039346656037ull;
+        for (uint32_t r = 0; r < k->rh / 4; r++) hh = fnv(hh, blocks + ((size_t)(k->y / 4 + r) * (w / 4) + k->x / 4) * 16, (size_t)k->rw * 4);
+        if (hh != k->hash) continue;
         pthread_mutex_lock(&g_lock);
-        if (g_hud.t != t || g_hud.l != l) {
-            static bool logged;
-            if (!logged) LOG("[gameconfirm] the prompts' button found in the %ux%u HUD texture\n", w, h), logged = true;
-            free(g_hud.bottom), free(g_hud.right);
-            g_hud = (typeof(g_hud)){t, l, malloc(n), malloc(n), false};
-        }
-        if (g_hud.bottom && g_hud.right) {
-            lin_copy(blocks, w, l->bottom, l->y, l->size, g_hud.bottom, true);
-            lin_copy(blocks, w, l->right, l->y, l->size, g_hud.right, true);
-            g_hud.swapped = g_want;
-            if (g_want) {  // (copied in while the bottom button is wanted: in already swapped)
-                lin_copy(blocks, w, l->bottom, l->y, l->size, g_hud.right, false);
-                lin_copy(blocks, w, l->right, l->y, l->size, g_hud.bottom, false);
-            }
+        int slot = -1;
+        for (int j = 0; j < MAX_SEEN; j++)
+            if (g_seen[j].t == t && g_seen[j].k == k) slot = j;
+        for (int j = 0; j < MAX_SEEN && slot < 0; j++)
+            if (!g_seen[j].t) slot = j;
+        if (slot >= 0) {
+            static bool logged[2];
+            if (!logged[k->kind]) LOG("[gameconfirm] the %s found in a %ux%u texture\n", k->kind == KIND_HUD ? "prompts' button" : "button icons", w, h), logged[k->kind] = true;
+            g_seen[slot].k = k, g_seen[slot].swapped = g_want[k->kind], g_seen[slot].t = t;
+            if (g_want[k->kind])  // (copied in while the bottom button is wanted: in already swapped)
+                for (uint32_t r = 0; r < k->rh / 4; r++)
+                    memcpy(blocks + ((size_t)(k->y / 4 + r) * (w / 4) + k->x / 4) * 16, k->alt + (size_t)r * k->rw * 4, (size_t)k->rw * 4);
         }
         pthread_mutex_unlock(&g_lock);
         return;
@@ -371,25 +342,25 @@ void btnicons_copied(void *t, uint8_t *blocks, uint32_t w, uint32_t h, uint32_t 
 }
 
 void btnicons_texture_gone(void *t) {
-    if (g_hud.t != t) return;
     pthread_mutex_lock(&g_lock);
-    if (g_hud.t == t) {
-        free(g_hud.bottom), free(g_hud.right);
-        g_hud = (typeof(g_hud)){0};
-    }
+    for (int j = 0; j < MAX_SEEN; j++)
+        if (g_seen[j].t == t) g_seen[j].t = NULL;
     pthread_mutex_unlock(&g_lock);
 }
 
-void btnicons_hud_bottom(bool bottom) {
-    g_want = bottom;
-    if (!g_hud.t || g_hud.swapped == bottom) return;
+void btnicons_set(bool menus, bool hud) {
+    g_want[KIND_MENU] = menus, g_want[KIND_HUD] = hud;
+    bool todo = false;
+    for (int j = 0; j < MAX_SEEN; j++) todo |= g_seen[j].t && g_seen[j].k && g_seen[j].swapped != g_want[g_seen[j].k->kind];
+    if (!todo) return;
     pthread_mutex_lock(&g_lock);
-    if (g_hud.t && g_hud.bottom && g_hud.right && g_hud.swapped != bottom) {
-        const HudLayout *l = g_hud.l;
-        size_t n = (size_t)l->size * l->size;
-        renderer_upload_region(g_hud.t, l->bottom, l->y, l->size, l->size, bottom ? g_hud.right : g_hud.bottom, n);
-        renderer_upload_region(g_hud.t, l->right, l->y, l->size, l->size, bottom ? g_hud.bottom : g_hud.right, n);
-        g_hud.swapped = bottom;
+    for (int j = 0; j < MAX_SEEN; j++) {
+        if (!g_seen[j].t || !g_seen[j].k) continue;
+        const Known *k = g_seen[j].k;
+        bool want = g_want[k->kind];
+        if (g_seen[j].swapped == want) continue;
+        renderer_upload_region(g_seen[j].t, k->x, k->y, k->rw, k->rh, want ? k->alt : k->orig, (size_t)k->rw * k->rh);
+        g_seen[j].swapped = want;
     }
     pthread_mutex_unlock(&g_lock);
 }

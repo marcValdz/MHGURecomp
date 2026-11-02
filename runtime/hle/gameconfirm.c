@@ -9,7 +9,7 @@
 // getter's result moves confirm / cancel in menus only. The hunter's buttons are changed where every pad's state is
 // read (FN_PAD_READ), and the menu getter puts back the buttons actually pressed (swapped), whatever the hunter got.
 // The hunter's mode only changes while neither face button is held, so a press can't change meaning under it when a
-// prompt comes or goes. The button icons follow (runtime/btnicons.c): the font's for good, the prompts' as they go.
+// prompt comes or goes. The button icons follow (runtime/btnicons.c): the font's and the title's while it is on, the prompts' as they go.
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -60,7 +60,7 @@ static void frame(Cpu *c) {
     g_frame_at = now;
     if (!active()) {
         g_wanted = FIELD_AS_IS;
-        btnicons_hud_bottom(false);
+        btnicons_set(false, false);
         return;
     }
     uint32_t q = LD32(G_SQUEST);
@@ -69,7 +69,7 @@ static void frame(Cpu *c) {
     if (quest != g_quest) LOG("[gameconfirm] %s\n", quest ? "quest" : "town: face buttons swapped");
     g_quest = quest;
     g_wanted = game_confirm_field_mode(!quest, prompt);
-    btnicons_hud_bottom(g_wanted != FIELD_AS_IS);
+    btnicons_set(true, g_wanted != FIELD_AS_IS);
 }
 
 static void pad_read(Cpu *c) {
