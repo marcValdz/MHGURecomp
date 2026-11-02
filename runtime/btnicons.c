@@ -13,8 +13,11 @@
 //   and right sprites trade places in the renderer's copy of the texture while it should show the bottom button. The
 //   game fills it with a GPU copy, so it is told as it is copied in, by the bytes of those two sprites as the archive
 //   has them; their blocks are kept, and swapping them is two region uploads.
+// - The title's "Press" button, baked into HD_title00 (title_<language>.arc): drawn as a shape in the same patched
+//   archive, below.
 #include "btnicons.h"
 
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +25,7 @@
 #include <sys/stat.h>
 #include <zlib.h>
 
+#include "nvn/bcn.h"
 #include "nvn/nvn.h"
 #include "nvn/tegra.h"
 #include "rt.h"
@@ -103,35 +107,175 @@ static uint8_t *arc_entry(const uint8_t *arc, long len, const char *name, uint8_
     return NULL;
 }
 
+// ---- the title's prompt
+// "Press <button>" at the title is a sprite in HD_title00: in HD UI mods' 2048 x 2048 texture a dark disc centered at
+// (559, 1458) with the Circle's red ring (the game's own 1024 x 1024 one has a white disc and a letter, left as it is).
+// The Cross is drawn over the ring as a shape, not a picture, and the blocks it touches are encoded again.
+#define TITLE "GUI\\99_texture\\HD_title00_BM_NOMIP"
+#define TITLE_W 2048u
+#define DISC_X 559
+#define DISC_Y 1458
+#define DISC_ERASE 35.0f  // (the ring reaches 32 pixels from the center)
+#define CROSS_LEN 32.2f   // (half the length of each stroke, to the middle of its square end)
+#define CROSS_HALF 3.9f   // (half the stroke's width)
+static const uint8_t DISC_COLOR[3] = {35, 34, 35}, CROSS_COLOR[3] = {140, 207, 255};
+
+// One 4 x 4 block of RGBA texels -> BC3 (alpha: its range; colors: the ends of the box they span)
+static void bc3_encode(const uint8_t px[16][4], uint8_t *b) {
+    int amin = 255, amax = 0, lo[3] = {255, 255, 255}, hi[3] = {0, 0, 0};
+    for (int i = 0; i < 16; i++) {
+        if (px[i][3] < amin) amin = px[i][3];
+        if (px[i][3] > amax) amax = px[i][3];
+        for (int c = 0; c < 3; c++) {
+            if (px[i][c] < lo[c]) lo[c] = px[i][c];
+            if (px[i][c] > hi[c]) hi[c] = px[i][c];
+        }
+    }
+    uint64_t abits = 0;  // (8 values a0 > a1; with a0 == a1 every index is 0)
+    for (int i = 0; i < 16 && amax > amin; i++) {
+        int k = ((px[i][3] - amin) * 14 + (amax - amin)) / (2 * (amax - amin));  // 0 = amin .. 7 = amax
+        abits |= (uint64_t)(k == 0 ? 1 : k == 7 ? 0 : 8 - k) << (3 * i);  // (index 0 = a0 = amax, 1 = a1 = amin)
+    }
+    b[0] = (uint8_t)amax, b[1] = (uint8_t)amin;
+    for (int i = 0; i < 6; i++) b[2 + i] = (uint8_t)(abits >> (8 * i));
+    int q[2][3], pal[4][3];
+    for (int e = 0; e < 2; e++)
+        for (int c = 0; c < 3; c++) {
+            int v = e ? lo[c] : hi[c], m = c == 1 ? 63 : 31;
+            q[e][c] = (v * m + 127) / 255;
+        }
+    uint32_t c0 = (uint32_t)q[0][0] << 11 | (uint32_t)q[0][1] << 5 | (uint32_t)q[0][2];
+    uint32_t c1 = (uint32_t)q[1][0] << 11 | (uint32_t)q[1][1] << 5 | (uint32_t)q[1][2];
+    if (c0 == c1) {  // (flat: index 0 is exact up to the 565 rounding)
+        b[8] = (uint8_t)c0, b[9] = (uint8_t)(c0 >> 8), b[10] = (uint8_t)c1, b[11] = (uint8_t)(c1 >> 8);
+        b[12] = b[13] = b[14] = b[15] = 0;
+        return;
+    }
+    if (c0 < c1) { uint32_t t = c0; c0 = c1; c1 = t; }  // (c0 > c1: the four-color mode)
+    int e0[3] = {(int)(c0 >> 11), (int)(c0 >> 5 & 63), (int)(c0 & 31)}, e1[3] = {(int)(c1 >> 11), (int)(c1 >> 5 & 63), (int)(c1 & 31)};
+    for (int c = 0; c < 3; c++) {
+        int m = c == 1 ? 63 : 31;
+        pal[0][c] = e0[c] * 255 / m, pal[1][c] = e1[c] * 255 / m;
+        pal[2][c] = (2 * pal[0][c] + pal[1][c]) / 3, pal[3][c] = (pal[0][c] + 2 * pal[1][c]) / 3;
+    }
+    uint32_t idx = 0;
+    for (int i = 0; i < 16; i++) {
+        int best = 0, bd = 1 << 30;
+        for (int k = 0; k < 4; k++) {
+            int d = 0;
+            for (int c = 0; c < 3; c++) d += (px[i][c] - pal[k][c]) * (px[i][c] - pal[k][c]);
+            if (d < bd) bd = d, best = k;
+        }
+        idx |= (uint32_t)best << (2 * i);
+    }
+    b[8] = (uint8_t)c0, b[9] = (uint8_t)(c0 >> 8), b[10] = (uint8_t)c1, b[11] = (uint8_t)(c1 >> 8);
+    for (int i = 0; i < 4; i++) b[12 + i] = (uint8_t)(idx >> (8 * i));
+}
+
+// How much of the pixel at (x, y) (4 x 4 samples) the Cross covers, 0 .. 16
+static int cross_cover(int x, int y) {
+    int n = 0;
+    for (int sy = 0; sy < 4; sy++)
+        for (int sx = 0; sx < 4; sx++) {
+            float dx = (float)(x - DISC_X) + ((float)sx - 1.5f) / 4, dy = (float)(y - DISC_Y) + ((float)sy - 1.5f) / 4;
+            float u = fabsf(dx + dy) * 0.70710678f, v = fabsf(dx - dy) * 0.70710678f;
+            n += (u <= CROSS_LEN && v <= CROSS_HALF) || (v <= CROSS_LEN && u <= CROSS_HALF);
+        }
+    return n;
+}
+
+// The ring replaced by the Cross in a TITLE texture; false when it isn't laid out as above
+static bool title_cross(uint8_t *tex, uint32_t size) {
+    Surface s;
+    if (!bc3_tex(tex, size, &s) || s.w != TITLE_W || s.h != TITLE_W) return false;
+    uint8_t *data = tex + TEX_HEAD;
+    uint32_t x0 = (DISC_X - 40) / 4 * 4, y0 = (DISC_Y - 40) / 4 * 4, n = 84;  // (the blocks around the disc's middle)
+    static uint8_t px[84][84][4];
+    for (uint32_t by = 0; by < n / 4; by++)
+        for (uint32_t bx = 0; bx < n / 4; bx++) {
+            uint8_t blk[16], t[16][4];
+            memcpy(blk, data + tegra_block_offset(x0 / 4 + bx, y0 / 4 + by, s.w / 4, s.h / 4, 16, s.bhl), 16);
+            bcn_decode(BCN_BC3, blk, 4, 4, (uint8_t *)t);
+            for (int i = 0; i < 16; i++) memcpy(px[by * 4 + (uint32_t)i / 4][bx * 4 + (uint32_t)i % 4], t[i], 4);
+        }
+    const uint8_t *ring = px[DISC_Y - 28 - y0][DISC_X - x0], *disc = px[DISC_Y - y0][DISC_X - 40 - x0];
+    if (ring[0] < 200 || ring[1] > 140 || ring[2] > 140 || abs(disc[0] - DISC_COLOR[0]) > 8 || disc[3] != 255) return false;
+    for (uint32_t by = 0; by < n / 4; by++)
+        for (uint32_t bx = 0; bx < n / 4; bx++) {
+            uint8_t t[16][4];
+            for (int i = 0; i < 16; i++) {
+                int x = (int)(x0 + bx * 4) + i % 4, y = (int)(y0 + by * 4) + i / 4;
+                uint8_t *p = px[by * 4 + (uint32_t)i / 4][bx * 4 + (uint32_t)i % 4];
+                float d = hypotf((float)(x - DISC_X), (float)(y - DISC_Y)), e = DISC_ERASE + 0.5f - d;
+                e = e < 0 ? 0 : e > 1 ? 1 : e;
+                int k = cross_cover(x, y);
+                for (int c = 0; c < 3; c++) {
+                    float v = (float)p[c] + ((float)DISC_COLOR[c] - (float)p[c]) * e;
+                    v += ((float)CROSS_COLOR[c] - v) * (float)k / 16;
+                    t[i][c] = (uint8_t)(v + 0.5f);
+                }
+                t[i][3] = p[3];
+            }
+            bc3_encode(t, data + tegra_block_offset(x0 / 4 + bx, y0 / 4 + by, s.w / 4, s.h / 4, 16, s.bhl));
+        }
+    return true;
+}
+
+// An archive being rebuilt: the source with changed entries' data appended (the other entries stay where they are)
+typedef struct { uint8_t *img; size_t len; } NewArc;
+static bool arc_put(NewArc *a, const uint8_t *arc, const uint8_t *e, const uint8_t *data, uint32_t size) {
+    uLongf plen = compressBound(size);
+    uint8_t *packed = malloc(plen);
+    bool ok = packed && compress2(packed, &plen, data, size, Z_DEFAULT_COMPRESSION) == Z_OK && a->len + plen <= 0x7FFFFFFFu;
+    uint8_t *img = ok ? realloc(a->img, a->len + plen) : NULL;
+    if (img) {
+        a->img = img;
+        memcpy(img + a->len, packed, plen);
+        uint8_t *ne = img + (e - arc);
+        wr32(ne + 68, (uint32_t)plen), wr32(ne + 72, (rd32(e + 72) & ~SIZE_MASK) | size), wr32(ne + 76, (uint32_t)a->len);
+        a->len += plen;
+    }
+    free(packed);
+    return img != NULL;
+}
+
 bool btnicons_patch(const char *src, char *out, size_t outsz) {
     struct stat st;
     if (stat(src, &st)) return false;
     long long v[2] = {(long long)st.st_size, (long long)st.st_mtime};
-    uint64_t h = fnv(14695981039346656037ull, "1", 1);  // (patch version)
+    uint64_t h = fnv(14695981039346656037ull, "2", 1);  // (patch version)
     h = fnv(fnv(h, src, strlen(src)), v, sizeof v);
     snprintf(out, outsz, "cache/btnicons/%016llx.arc", (unsigned long long)h);
     if (!stat(out, &st) && st.st_size > 0) return true;  // (made on an earlier start)
 
     long len = 0;
     uint32_t size = 0;
-    uint8_t *arc = load(src, &len), *e = NULL, *tex = arc ? arc_entry(arc, len, FONT, &e, &size) : NULL, *packed = NULL,
-            *img = NULL;
+    uint8_t *arc = load(src, &len), *e = NULL, *tex = NULL;
+    NewArc a = {arc ? malloc((size_t)len) : NULL, (size_t)len};
     bool ok = false;
+    if (!a.img) goto done;
+    memcpy(a.img, arc, (size_t)len);
+    int changed = 0;
     Surface s;
-    if (!tex) goto done;
-    if (!bc3_tex(tex, size, &s) || s.w != s.h || s.w % 128) {
-        LOG("[romfs] %s: its button icons aren't laid out as known: not swapped\n", src);
-        goto done;
+    if ((tex = arc_entry(arc, len, FONT, &e, &size))) {
+        if (!bc3_tex(tex, size, &s) || s.w != s.h || s.w % 128) {
+            LOG("[romfs] %s: its button icons aren't laid out as known: not swapped\n", src);
+        } else {
+            uint32_t cell = s.w * 3 / 32;
+            rect_swap(tex + TEX_HEAD, s, 2 * cell, 3 * cell, 0, cell);
+            if (!arc_put(&a, arc, e, tex, size)) goto done;
+            changed++;
+        }
+        free(tex);
     }
-    uint32_t cell = s.w * 3 / 32;
-    rect_swap(tex + TEX_HEAD, s, 2 * cell, 3 * cell, 0, cell);
-    uLongf plen = compressBound(size);
-    if (!(packed = malloc(plen)) || compress2(packed, &plen, tex, size, Z_DEFAULT_COMPRESSION) != Z_OK) goto done;
-    if ((uint64_t)len + plen > 0x7FFFFFFFu || !(img = malloc((size_t)len + plen))) goto done;
-    memcpy(img, arc, (size_t)len);
-    memcpy(img + len, packed, plen);
-    uint8_t *ne = img + (e - arc);
-    wr32(ne + 68, (uint32_t)plen), wr32(ne + 72, (rd32(e + 72) & ~SIZE_MASK) | size), wr32(ne + 76, (uint32_t)len);
+    if ((tex = arc_entry(arc, len, TITLE, &e, &size))) {
+        if (title_cross(tex, size)) {  // (the game's own 1024 x 1024 one: its letter stays)
+            if (!arc_put(&a, arc, e, tex, size)) goto done;
+            changed++;
+        }
+        free(tex), tex = NULL;
+    }
+    if (!changed) goto done;
 
     mkdir("cache", 0755);
     mkdir("cache/btnicons", 0755);
@@ -139,14 +283,13 @@ bool btnicons_patch(const char *src, char *out, size_t outsz) {
     snprintf(tmp, sizeof tmp, "%s.tmp", out);
     FILE *f = fopen(tmp, "wb");
     if (!f) goto done;
-    size_t total = (size_t)len + plen;
-    ok = fwrite(img, 1, total, f) == total;
+    ok = fwrite(a.img, 1, a.len, f) == a.len;
     ok = fclose(f) == 0 && ok;
     if (ok) ok = rename(tmp, out) == 0;
     if (!ok) remove(tmp);
     else LOG("[romfs] button icons swapped: %s\n", src);
 done:
-    free(arc), free(tex), free(packed), free(img);
+    free(arc), free(tex), free(a.img);
     return ok;
 }
 

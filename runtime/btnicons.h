@@ -4,8 +4,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// Writes to a cache file (path in `out`) the archive `src` with the two icons swapped in its button font texture.
-// False when the archive has no such texture, or one laid out in a way not known here: the caller keeps `src`.
+// Writes to a cache file (path in `out`) the archive `src` with the two icons swapped in its button font texture, and
+// the title's "Press" button drawn as the bottom button's.
+// False when the archive has neither, or they are laid out in a way not known here: the caller keeps `src`.
 bool btnicons_patch(const char *src, char *out, size_t outsz);
 
 // The field prompts' button (one sprite for every prompt, in the quest HUD texture): what it looks like in the

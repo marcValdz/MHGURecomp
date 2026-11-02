@@ -220,7 +220,8 @@ static File *file_in(Dir *d, const char *name) {
 }
 
 // [Controls] GameConfirm = South: the archives with the button font, as the mods left them, with the bottom and the
-// right button's icons swapped (btnicons.c): loc/arc/resident.arc (towns) and each language's arc/quest_<lang>.arc
+// right button's icons swapped (btnicons.c): loc/arc/resident.arc (towns) and each language's arc/quest_<lang>.arc,
+// and each language's arc/title_<lang>.arc for the title's "Press" button
 static void swap_button_icons(Dir *root) {
     Dir *nx = subdir(root, "nativeNX");
     File *arcs[64];
@@ -230,6 +231,8 @@ static void swap_button_icons(Dir *root) {
         char name[300];
         snprintf(name, sizeof name, "quest_%s.arc", nx->dirs[i]->name);
         if ((arcs[n] = file_in(subdir(nx->dirs[i], "arc"), name))) btnicons_learn_hud(arcs[n++]->path);
+        snprintf(name, sizeof name, "title_%s.arc", nx->dirs[i]->name);
+        if (n < 64 && (arcs[n] = file_in(subdir(nx->dirs[i], "arc"), name))) n++;
     }
     int swapped = 0;
     for (int i = 0; i < n; i++) {
