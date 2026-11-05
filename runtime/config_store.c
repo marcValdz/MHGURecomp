@@ -230,7 +230,7 @@ void config_store_loaded(const Config *c) {
 }
 void config_runtime_init(const Config *effective) {
     startup = saved; runtime_ready = true; SDL_SetAtomicInt(&fsr_running, effective->fsr != 0);
-    runtime_fsr4 = effective->fsr && effective->fsr_upscaler >= FSR_UP_4;
+    runtime_fsr4 = effective->fsr && effective->fsr_upscaler >= FSR_UP_4_LITE;
     publish_live(effective, true);
     // (the sizes the game starts with: effective has the resolved render size in render_w / render_h, config_load)
     SDL_SetAtomicInt(&live_rs_w, (int)g_render_size[0]), SDL_SetAtomicInt(&live_rs_h, (int)g_render_size[1]);
@@ -359,7 +359,7 @@ bool config_show_fps(void) { return SDL_GetAtomicInt(&show_fps) != 0; }
 // FSR 4 needs Vulkan 1.3 and its device extensions, which the device only gets when the game starts with FSR 4 chosen
 // (nvn/vulkan/device.c: other players run upstream's setup). Wanting it without them is a restart; switching between
 // FSR 3.1, FSR 4 and FSR 4 Lite on a device made for FSR 4 is live (nvn/vulkan/fsr.c fsr_live_options).
-bool config_fsr4_needs_restart(const Config *c) { return runtime_ready && !runtime_fsr4 && c->fsr && c->fsr_upscaler >= FSR_UP_4; }
+bool config_fsr4_needs_restart(const Config *c) { return runtime_ready && !runtime_fsr4 && c->fsr && c->fsr_upscaler >= FSR_UP_4_LITE; }
 bool config_restart_required(const Config *c) {
     if (!runtime_ready) return false;
     if (config_fsr4_needs_restart(c)) return true;

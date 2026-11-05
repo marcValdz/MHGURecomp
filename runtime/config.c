@@ -197,7 +197,7 @@ static const char DEFAULT_INI[] =
     "FSR = Off\n"
     "\n"
     "; Which upscaler to use (FSR3 is FSR 3.1)\n"
-    "; FSR3, FSR4, FSR4Lite (FSR4Lite is FSR 4.1's smaller model; it needs amdxcffx64.dll)\n"
+    "; FSR3, FSR4Lite, FSR4 (FSR4Lite is FSR 4.1's smaller model; it needs amdxcffx64.dll)\n"
     "; Default: FSR3\n"
     "Upscaler = FSR3\n"
     "\n"
@@ -730,7 +730,7 @@ const ConfigSetting g_settings[] = {
     {"Anti-aliasing", "AntiAliasing", SET_CHOICE, F(aa), 0, 0, 0, "FXAA,CMAA2,SMAA,SMAAS2x,SMAAT2x,SMAA4x", NULL, false,
      ERR_MISC},
     {"Upscaler", "FSR", SET_BOOL, F(fsr), 0, 0, 0, NULL, NULL, false, ERR_TOGGLE},
-    {"Upscaler", "Upscaler", SET_CHOICE, F(fsr_upscaler), 0, 0, 0, "FSR3|fsr3.1|3,FSR4|4,FSR4Lite|4lite", NULL, false, ERR_FSR},
+    {"Upscaler", "Upscaler", SET_CHOICE, F(fsr_upscaler), 0, 0, 0, "FSR3|fsr3.1|3,FSR4Lite|4lite,FSR4|4", NULL, false, ERR_FSR},
     {"Upscaler", "FSRQuality", SET_CHOICE, F(fsr_quality), 0, 0, 0,
      "NativeAA|native|aa,Quality,Balanced,Performance,UltraPerformance|ultraperf", NULL, false, ERR_FSR},
     {"Upscaler", "Sharpness", SET_FLOAT, F(fsr_sharpness), 0, 0.0f, 1.0f, NULL, NULL, false, ERR_FSR},

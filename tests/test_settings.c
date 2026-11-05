@@ -232,6 +232,7 @@ int main(int argc, char **argv) {
     assert(config_save(&fsr_config,error,sizeof error));  // (all live but FSR 4, which this run did not start with)
     assert(config_restart_required(&fsr_config) && config_fsr4_needs_restart(&fsr_config));
     Config fsr3=fsr_config;fsr3.fsr_upscaler=FSR_UP_3;assert(!config_restart_required(&fsr3));
+    Config lite=fsr_config;lite.fsr_upscaler=FSR_UP_4_LITE;assert(FSR_UP_4_LITE<FSR_UP_4&&config_fsr4_needs_restart(&lite));
     text = read_file(path);
     assert(strstr(text, "Sharpness = 0.65\r\n") && strstr(text, "Reactive = 0.35\r\n") && strstr(text, "Upscaler = FSR4\r\n"));
     free(text);

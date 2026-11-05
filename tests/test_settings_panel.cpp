@@ -641,6 +641,7 @@ int main() {
     down();
     selected("fsr.provider");
     press(ImGuiKey_GamepadDpadRight);
+    press(ImGuiKey_GamepadDpadRight);
     down();
     selected("fsr.quality");
     press(ImGuiKey_GamepadDpadRight);

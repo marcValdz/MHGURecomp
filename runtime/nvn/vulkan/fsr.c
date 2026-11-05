@@ -2058,7 +2058,7 @@ static void fsr_live_options(bool quiet) {
     int up = config_live_fsr_upscaler();
     if (up != upscaler) {
         uint64_t t0 = plat_now_ns();
-        bool want4 = up >= FSR_UP_4, device4 = g_config.fsr && g_config.fsr_upscaler >= FSR_UP_4;
+        bool want4 = up >= FSR_UP_4_LITE, device4 = g_config.fsr && g_config.fsr_upscaler >= FSR_UP_4_LITE;
         if (want4 && device4 && !fsr4_tried) fsr4_tried = true, fsr4_ok = vk_fsr4_init();
         bool was4 = use_fsr4;
         use_fsr4 = want4 && fsr4_ok;

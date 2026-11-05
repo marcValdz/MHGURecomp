@@ -1251,10 +1251,10 @@ std::vector<Row> main_rows() {
         }
         if (c.fsr && !c.hdr) {
             add_choice(
-                r, "fsr.provider", "Upscaler", c.fsr_upscaler, {"FSR 3.1", "FSR 4", "FSR 4 Lite"},
+                r, "fsr.provider", "Upscaler", c.fsr_upscaler, {"FSR 3.1", "FSR 4 Lite", "FSR 4"},
                 [](int v) { s.draft.fsr_upscaler = v; }, ini("Upscaler"));
             if (config_fsr4_needs_restart(&c)) r.back().cold = true;  // (FSR 4 wanted, the game started without it)
-            else if (g_fsr4_fallback && c.fsr_upscaler >= FSR_UP_4 && g_config.fsr && g_config.fsr_upscaler >= FSR_UP_4) {
+            else if (g_fsr4_fallback && c.fsr_upscaler >= FSR_UP_4_LITE && g_config.fsr && g_config.fsr_upscaler >= FSR_UP_4_LITE) {
                 r.back().value += std::string(" (") + tr("FSR 3.1 in use") + ")";  // (fsr4.c: FSR 4 didn't start)
                 r.back().warn = true;
                 r.back().help = tr(g_fsr4_fallback);
